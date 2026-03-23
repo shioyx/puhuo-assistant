@@ -1,0 +1,34 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "responseHeaders": [
+        { "header": "X-Frame-Options",     "operation": "remove" },
+        { "header": "x-frame-options",     "operation": "remove" },
+        { "header": "Content-Security-Policy", "operation": "remove" },
+        { "header": "content-security-policy", "operation": "remove" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "*.1688.com/*",
+      "resourceTypes": ["sub_frame", "main_frame"]
+    }
+  },
+  {
+    "id": 2,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "responseHeaders": [
+        { "header": "X-Frame-Options",     "operation": "remove" },
+        { "header": "x-frame-options",     "operation": "remove" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "fxg.jinritemai.com/*",
+      "resourceTypes": ["sub_frame"]
+    }
+  }
+]

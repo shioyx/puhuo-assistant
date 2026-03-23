@@ -1,0 +1,14 @@
+{
+  "version": "3.0.1",
+  "date": "2026-03-23",
+  "changelog": [
+    "全页独立标签页模式，告别侧边栏",
+    "内嵌1688浏览器，鼠标悬停一键采集",
+    "分档加价（×3.0~×1.8）自动尾数美化",
+    "违禁词库138个，实时高亮",
+    "AI标题优化接入 Claude API",
+    "精简菜单，去除无货源不需要的功能"
+  ],
+  "panel_url": "https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/puhuo-assistant/main/panel/panel.html",
+  "zip_url": "https://github.com/YOUR_GITHUB_USERNAME/puhuo-assistant/releases/latest/download/plugin.zip"
+}

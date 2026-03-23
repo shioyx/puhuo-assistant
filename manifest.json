@@ -1,0 +1,68 @@
+{
+  "manifest_version": 3,
+  "name": "1688铺货助手Pro",
+  "version": "3.0.0",
+  "description": "1688采集→编辑→违禁词检测→一键铺货抖音小店，独立页面全流程工具",
+  "icons": {
+    "16":  "icons/icon16.png",
+    "48":  "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "storage",
+    "tabs",
+    "activeTab",
+    "scripting",
+    "declarativeNetRequest",
+    "declarativeNetRequestWithHostAccess"
+  ],
+  "host_permissions": [
+    "https://*.1688.com/*",
+    "https://fxg.jinritemai.com/*",
+    "https://detail.m.1688.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://detail.1688.com/*",
+        "https://s.1688.com/*",
+        "https://*.1688.com/*"
+      ],
+      "js": ["content_1688.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://fxg.jinritemai.com/*"],
+      "js": ["content_douyin.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ruleset_1",
+        "enabled": true,
+        "path": "rules/iframe_rules.json"
+      }
+    ]
+  },
+  "action": {
+    "default_title": "打开1688铺货助手",
+    "default_popup": "",
+    "default_icon": {
+      "16":  "icons/icon16.png",
+      "48":  "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["panel/panel.html", "icons/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
