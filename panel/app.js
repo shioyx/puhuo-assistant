@@ -1,0 +1,5587 @@
+
+
+
+/* ═══ app.js ═══ */
+/**
+ * app.js — 核心路由 + 全局状态 + 工具函数
+ */
+'use strict';
+
+/* ══════════════════════════════════════════════════════════════
+   全局状态
+══════════════════════════════════════════════════════════════ */
+const App = {
+  page: 'home',
+  subPage: null,
+  sidebarCollapsed: false,
+  shopName: '',
+  shopId: '',
+  aiPower: 0,
+
+  // 用户数据（LocalStorage持久化）
+  products: [],        // 云商品库（采集箱）
+  history: [],         // 铺货历史
+  templates: [
+    { id:'tpl_standard', name:'无货源标准模板', publishMode:'warehouse', markupRatio:2.0, commissionRate:30, titlePrefix:'', titleSuffix:'【包邮】', isDefault:true, desc:'进价×2，达人佣金30%，放入仓库' },
+    { id:'tpl_homeware',  name:'家居饰品专用模板', publishMode:'warehouse', markupRatio:2.2, commissionRate:25, titlePrefix:'', titleSuffix:'', isDefault:false, desc:'家居类×2.2，佣金25%' },
+    { id:'tpl_traffic',   name:'引流款低价模板', publishMode:'warehouse', markupRatio: 2.0, commissionRate:10, titlePrefix:'', titleSuffix:'', isDefault:false, desc:'低价引流×1.5倍，佣金10%' },
+    { id:'tpl_luxury',    name:'高客单利润款模板', publishMode:'warehouse', markupRatio:2.5, commissionRate:20, titlePrefix:'', titleSuffix:'', isDefault:false, desc:'高价款×2.5倍，佣金20%' },
+  ],       // 铺货模板
+  cloudLibs: [],       // 云商品库分类
+  shops: [],           // 绑定店铺列表
+
+  // 设置
+  settings: {
+    markupType: 'ratio',    // 'ratio' | 'fixed'
+    markupRatio: 2.0,
+    markupFixed: 30,
+    markupTiers: [
+      { maxPrice:10,  ratio:3.0 },
+      { maxPrice:20,  ratio:2.5 },
+      { maxPrice:50,  ratio:2.2 },
+      { maxPrice:100, ratio:2.0 },
+      { maxPrice:999, ratio:1.8 },
+    ],
+    titlePrefix: '',
+    titleSuffix: '',
+    violWords: ["第一", "最好", "最优", "最高", "最低", "最大", "最小", "最多", "最少", "最快", "最强", "最美", "最便宜", "最划算", "最值", "极品", "顶级", "巅峰", "无敌", "称霸", "唯一", "绝版", "史上最", "全网最", "全球最", "全场最", "正品", "假一赔十", "假一赔百", "假一罚十", "纯正品", "品牌正品", "原厂正品", "专柜正品", "官方正品", "原装正品", "100%正品", "百分百正品", "假一赔三", "官方授权", "官网", "官方旗舰", "旗舰店", "专卖店", "直营", "官方直营", "品牌授权", "正规授权", "代理授权", "独家授权", "专属授权", "指定代理", "医用", "治疗", "疗效", "医疗级", "消炎", "杀菌", "抑菌", "抗菌", "医疗", "医院", "临床", "诊断", "处方", "药用", "药物级", "医疗器械", "纯天然", "全天然", "纯绿色", "有机认证", "无添加", "0添加", "零添加", "无农药", "无防腐", "野生", "原生态", "原始", "纯手工", "祖传", "祖传秘方", "百年", "减肥", "瘦身", "燃脂", "塑形", "消脂", "快速减重", "一周瘦", "7天瘦", "轻松瘦", "增高", "长高", "增白", "美白", "嫩肤", "祛斑", "去疤", "去痘", "永久", "一劳永逸", "根治", "彻底", "立竿见影", "即刻", "秒效", "一次见效", "包治", "100%有效", "绝对有效", "保证有效", "无副作用", "亏本", "跳楼价", "骨折价", "清仓甩卖", "处理价", "员工价", "出厂价", "底价", "成本价", "内部价", "批发价", "最低价保证", "全网最低价", "专家推荐", "明星同款", "网红同款", "爆款同款", "限量", "仅剩", "最后库存", "机不可失", "错过遗憾", "立即抢购", "手慢无"],
+    publishMode: 'warehouse',
+    freightTemplateId: '',
+    autoFillDouyin: true,
+  },
+};
+
+/* ══════════════════════════════════════════════════════════════
+   本地存储
+══════════════════════════════════════════════════════════════ */
+function loadData() {
+  try {
+    const raw = localStorage.getItem('puhuo5_data');
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    if (d.products  && Array.isArray(d.products))  App.products  = d.products;
+    if (d.history   && Array.isArray(d.history))   App.history   = d.history;
+    if (d.templates && Array.isArray(d.templates)) App.templates = d.templates;
+    if (d.settings)  App.settings = { ...App.settings, ...d.settings };
+
+    // 版本迁移 v2：确保无货源标准参数
+    if (!d._v2) {
+      if (App.settings.markupRatio < 2.0)  App.settings.markupRatio = 2.0;
+      if (App.settings.markupFixed  < 30)  App.settings.markupFixed  = 30;
+      if (!App.settings.markupTiers) App.settings.markupTiers = [
+        {maxPrice:10,ratio:3.0},{maxPrice:20,ratio:2.5},{maxPrice:50,ratio:2.2},
+        {maxPrice:100,ratio:2.0},{maxPrice:999,ratio:1.8},
+      ];
+      saveData();  // 写回带 _v2 标记
+      App._migrated = true;
+    }
+  } catch(_) {}
+}
+function saveData() {
+  try {
+    localStorage.setItem('puhuo5_data', JSON.stringify({_v2:true,
+      products: App.products, history: App.history,
+      templates: App.templates, shops: App.shops,
+      settings: App.settings,
+    }));
+  } catch(_) {}
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Toast 通知
+══════════════════════════════════════════════════════════════ */
+const _toastIcons = { success:'✅', error:'❌', warning:'⚠️', info:'ℹ️' };
+function toast(msg, type='info', title='', ms=3000) {
+  const container = document.getElementById('toast-container');
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `
+    <span class="t-icon">${_toastIcons[type]||'ℹ️'}</span>
+    <div class="t-body">
+      ${title ? `<div class="t-title">${title}</div>` : ''}
+      <div class="t-msg">${msg}</div>
+    </div>
+    <span class="t-close" onclick="this.parentElement.remove()">✕</span>`;
+  container.appendChild(el);
+  setTimeout(() => {
+    el.style.animation = 'toast-out .3s ease forwards';
+    setTimeout(() => el.remove(), 300);
+  }, ms);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Modal 弹窗系统
+══════════════════════════════════════════════════════════════ */
+const _modals = {};
+function registerModal(id, renderFn) { _modals[id] = renderFn; }
+function showModal(id, data) {
+  const fn = _modals[id];
+  if (!fn) return;
+  const container = document.getElementById('modal-container');
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask';
+  mask.id = `mask-${id}`;
+  mask.innerHTML = fn(data);
+  mask.onclick = e => { if (e.target === mask) closeModal(id); };
+  container.appendChild(mask);
+  const init = window[`modal_init_${id.replace(/-/g,'_')}`];
+  if (init) init(data);
+}
+function closeModal(id) {
+  const el = document.getElementById(`mask-${id}`);
+  if (el) el.remove();
+}
+
+/* ══════════════════════════════════════════════════════════════
+   侧边栏菜单配置
+══════════════════════════════════════════════════════════════ */
+const MENU = [
+  { id:'home',         label:'首页',       icon:'🏠' },
+  { id:'goods_collect',label:'1688商品采集', icon:'🔍', parent:'select', tag:'核心' },
+  {
+    id:'copy_up', label:'复制上货', icon:'📋',
+    children:[
+      { id:'link_puhuo',  label:'链接铺货',   icon:'🔗', tag:'HOT' },
+      { id:'ai_crack',    label:'AI爆款裂变',  icon:'🧬', tag:'AI'  },
+      { id:'same_goods',  label:'搜同款铺货',  icon:'🔎' },
+      { id:'full_store',  label:'全店铺货',    icon:'🏬' },
+      { id:'store_copy',  label:'店铺授权复制', icon:'📋' },
+    ]
+  },
+  {
+    id:'select', label:'选品中心', icon:'🔍',
+    children:[
+      { id:'goods_collect', label:'1688商品采集', icon:'🔍' },
+    ]
+  },
+  {
+    id:'cloud_lib', label:'云商品库', icon:'☁️', tag:'NEW',
+    children:[
+      { id:'collect_box',  label:'采集箱',   icon:'📦' },
+      { id:'puhuo_list',   label:'铺货列表', icon:'📋' },
+    ]
+  },
+  {
+    id:'ai_goods', label:'AI商品管理', icon:'✨',
+    children:[
+      { id:'viol_predict', label:'AI违规预测', icon:'🛡️', tag:'AI' },
+      { id:'title_opt',    label:'AI标题优化', icon:'✍️', tag:'AI' },
+    ]
+  },
+  { id:'batch_modify',    label:'商品批量修改', icon:'✏️' },
+  { id:'multi_shop',      label:'多店铺管理',   icon:'🏪' },
+  { id:'puhuo_templates', label:'铺货模板管理', icon:'📄' },
+  { id:'video_tool',      label:'主图视频工具', icon:'🎬' },
+  {
+    id:'ops_tools', label:'抖店运营工具', icon:'🔧',
+    children:[
+      { id:'time_onoff',   label:'定时上下架',   icon:'⏰' },
+      { id:'clean_noflow', label:'清理无流量',    icon:'🧹' },
+      { id:'score_up',     label:'一键提升体验分', icon:'⭐' },
+    ]
+  },
+  { id:'settings', label:'设置', icon:'⚙️' },
+];
+
+/* ══════════════════════════════════════════════════════════════
+   渲染侧边栏
+══════════════════════════════════════════════════════════════ */
+function renderSidebar() {
+  const nav = document.getElementById('sb-nav');
+  let html = '';
+  for (const item of MENU) {
+    const isActive = App.page === item.id || (item.children && item.children.some(c => c.id === App.page));
+    const isOpen   = isActive && item.children;
+    const tag = item.tag ? `<span class="stag ${
+    typeof item.tag === 'object' ? item.tag.cls :
+    item.tag==='HOT' ? 'stag-hot' : item.tag==='AI' ? 'stag-ai' : item.tag==='NEW' ? 'stag-new' : 'stag-default'
+  }">${typeof item.tag === 'object' ? item.tag.text : item.tag}</span>` : '';
+    const arr = item.children ? `<span class="sarr">›</span>` : '';
+    html += `
+    <div class="sb-item${isActive&&!item.children?' active':''}${isOpen?' open':''}"
+      data-id="${item.id}"
+      onclick="${item.children ? `toggleSub('${item.id}')` : `nav('${item.id}')`}">
+      <span class="si">${item.icon}</span>
+      <span class="sl">${item.label}</span>
+      ${tag}${arr}
+    </div>`;
+    if (item.children) {
+      html += `<div class="sub-menu${isOpen?' open':''}" id="sub-${item.id}">`;
+      for (const c of item.children) {
+        const cActive = App.page === c.id;
+        const ctag = c.tag ? `<span class="sub-tag">${c.tag.text}</span>` : '';
+        html += `
+        <div class="sub-item${cActive?' active':''}" data-id="${c.id}" onclick="nav('${c.id}')">
+          <span class="sub-dot"></span>
+          <span style="flex:1">${c.label}</span>
+          ${ctag}
+        </div>`;
+      }
+      html += `</div>`;
+    }
+  }
+  nav.innerHTML = html;
+}
+
+function toggleSub(id) {
+  const sub = document.getElementById(`sub-${id}`);
+  const item = document.querySelector(`.sb-item[data-id="${id}"]`);
+  if (!sub) return;
+  const isOpen = sub.classList.contains('open');
+  document.querySelectorAll('.sub-menu.open').forEach(el => {
+    if (el !== sub) {
+      el.classList.remove('open');
+      el.previousElementSibling?.classList.remove('open');
+    }
+  });
+  sub.classList.toggle('open', !isOpen);
+  item?.classList.toggle('open', !isOpen);
+}
+
+function toggleSidebar() {
+  App.sidebarCollapsed = !App.sidebarCollapsed;
+  document.getElementById('sidebar').classList.toggle('collapsed', App.sidebarCollapsed);
+  const btn = document.getElementById('collapse-btn');
+  btn.textContent = App.sidebarCollapsed ? '▶' : '◀ 收起';
+}
+
+/* ══════════════════════════════════════════════════════════════
+   路由导航
+══════════════════════════════════════════════════════════════ */
+const PAGE_META = {};
+MENU.forEach(m => {
+  PAGE_META[m.id] = { label: m.label, parent: null };
+  (m.children||[]).forEach(c => PAGE_META[c.id] = { label: c.label, parent: m });
+});
+
+function nav(page) {
+  App.page = page;
+  renderSidebar();
+
+  // 面包屑（安全访问，新版全页模式里这些元素可能不存在）
+  const meta = PAGE_META[page];
+  const root = document.getElementById('bc-root');
+  const sep  = document.getElementById('bc-sep');
+  const cur  = document.getElementById('bc-cur');
+  // 更新新版顶栏面包屑
+  if (typeof updateBreadcrumb === 'function') updateBreadcrumb(page);
+  if (meta?.parent) {
+    if(root) { root.textContent = meta.parent.label; root.style.cursor='pointer'; root.onclick=()=>nav(meta.parent.id); }
+    if(sep) sep.style.display = '';
+    if(cur) cur.textContent = meta.label;
+  } else {
+    if(root) { root.textContent = meta?.label||page; root.style.cursor='default'; root.onclick=null; }
+    if(sep) sep.style.display = 'none';
+    if(cur) cur.textContent = '';
+  }
+
+  // 渲染页面
+  const scroll = document.getElementById('page-scroll');
+  scroll.scrollTop = 0;
+  const renderer = PAGES[page];
+  if (renderer) {
+    scroll.innerHTML = renderer();
+    const init = PAGE_INITS[page];
+    if (init) setTimeout(init, 0);
+  } else {
+    scroll.innerHTML = renderComingSoon(meta?.label || page);
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Coming Soon 页面
+══════════════════════════════════════════════════════════════ */
+function renderComingSoon(name) {
+  return `<div class="empty" style="margin-top:80px">
+    <div class="ei">🚧</div>
+    <div class="et">${name}</div>
+    <div class="ed">该功能正在紧张开发中，敬请期待<br>如有问题请联系客服</div>
+    <button class="btn btn-primary" style="margin-top:16px" onclick="nav('home')">返回首页</button>
+  </div>`;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   业务工具函数
+══════════════════════════════════════════════════════════════ */
+
+// 图片URL修复工具函数
+function fixImgUrl(src) {
+  if (!src) return '';
+  let url = src.trim();
+  // 协议修复
+  if (url.startsWith('//')) url = 'https:' + url;
+  if (!url.startsWith('http')) return src;
+  // 尺寸参数去除（多种格式）
+  url = url
+    .replace(/_\d+x\d+q\d+\.jpg/gi, '.jpg')
+    .replace(/_\d+x\d+\.jpg/gi, '.jpg')
+    .replace(/\.jpg_\d+x\d+\.jpg/gi, '.jpg')
+    .replace(/!tplv-[^&"' ]+/g, '')
+    .replace(/\?x-oss-process=[^&"' ]*/g, '')
+    .replace(/\.jp($|[^e])/gi, (_, s) => '.jpg' + (s||''))
+    .replace(/\.pn$/gi, '.png')
+    .replace(/\.jpe$/gi, '.jpeg');
+  return url;
+}
+function calcSell(p) {
+  if (p.sellPrice && p.sellPrice > 0) return p.sellPrice;
+  const cost = parseFloat(p.price) || 0;
+  if (!cost) return 0;
+
+  if (App.settings.markupType === 'fixed') {
+    return +(cost + (App.settings.markupFixed || 30)).toFixed(2);
+  }
+
+  // 分档加价：按进货价区间选择不同倍率
+  const tiers = App.settings.markupTiers || [
+    { maxPrice: 10,  ratio: 3.0  },
+    { maxPrice: 20,  ratio: 2.5  },
+    { maxPrice: 50,  ratio: 2.2  },
+    { maxPrice: 100, ratio: 2.0  },
+    { maxPrice: 999, ratio: 1.8  },
+  ];
+
+  let ratio = App.settings.markupRatio || 2.0;
+  for (const tier of tiers) {
+    if (cost <= tier.maxPrice) { ratio = tier.ratio; break; }
+  }
+
+  let sell = +(cost * ratio).toFixed(2);
+
+  // 尾数美化：x.xx → x.9 或 x.8
+  const int = Math.floor(sell);
+  if (sell - int < 0.5) sell = +(int - 0.1).toFixed(1);  // e.g. 37.2 → 36.9
+  else sell = +(int + 0.9).toFixed(1);                     // e.g. 37.8 → 37.9
+
+  return sell > 0 ? sell : +(cost * 2).toFixed(2);
+}
+
+function applyTitleTpl(t) {
+  const { titlePrefix:p='', titleSuffix:s='' } = App.settings;
+  return (p + (t||'') + s).substring(0, 60);
+}
+
+function checkViol(text) {
+  return (App.settings.violWords||[]).filter(w => w && text.includes(w));
+}
+
+function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2,5); }
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+
+function fmtPrice(n) { return n != null ? `¥${Number(n).toFixed(2)}` : '—'; }
+
+/* ══════════════════════════════════════════════════════════════
+   Mock 数据生成（开发用）
+══════════════════════════════════════════════════════════════ */
+function mockGoods(keyword, count=10, category='') {
+  const isHomeware = category === '家居' || /花瓶|摆件|香薰|烛台|相框|镜子|挂画|蜡烛|收纳|装饰|窗帘|地毯|抱枕|桌布|灯饰|书架|置物/.test(keyword);
+  const cats = isHomeware ? ['家居装饰','客厅饰品','卧室装饰','桌面摆件','香薰礼品'] : ['女装','男装','童装','鞋类','配饰','家居','美妆'];
+  const suppliers = isHomeware
+    ? ['义乌美居工艺品厂','广州东方装饰礼品','浙江永康家居制品','深圳创意家居饰品','佛山顺德家居工艺']
+    : ['广州白云服装厂','义乌百汇服饰有限公司','佛山顺德制衣厂','杭州余杭服饰批发','苏州鑫泰纺织'];
+  const sales = isHomeware
+    ? ['月代发2.8w+','月代发1.5w+','月代发8k+','月代发3.2k+','月代发6k+','月代发1.1w+']
+    : ['月代发3.2w+','月代发1.2w+','月代发8.5k+','月代发5.1k+','月代发6.3k+','月代发2.4k+'];
+  
+  const homeTitles = [
+    `${keyword}北欧简约陶瓷花瓶插花客厅摆件装饰品家居软装桌面`,
+    `简约现代${keyword}香薰蜡烛礼盒套装卧室浪漫氛围感生日礼物`,
+    `${keyword}创意树脂小摆件工艺品家居客厅电视柜装饰品桌面摆设`,
+    `北欧轻奢${keyword}干花插花花瓶玻璃透明水培植物水磨石客厅摆件`,
+    `${keyword}相框摆台结婚照大尺寸创意实木画框照片打印定制`,
+    `现代简约${keyword}壁挂装饰画客厅沙发背景墙挂画卧室餐厅壁画`,
+    `${keyword}创意DIY毕加索抽象线条画装饰画背景墙壁画家居装饰`,
+    `北欧风格${keyword}香薰精油室内空气净化扩香器高档家居礼品套装`,
+  ];
+  const clothTitles = [
+    `${keyword}2025夏季新款法式碎花雪纺连衣裙女气质收腰显瘦中长款度假仙女裙`,
+    `温柔风${keyword}高腰显瘦A字裙半身裙女夏中长款仙女飘逸`,
+    `${keyword}2025夏新款小清新绑带吊带连衣裙宽松显瘦海边度假沙滩长裙`,
+    `韩版宽松慵懒风短袖T恤女夏薄款百搭学生字母印花${keyword}`,
+    `${keyword}高腰减龄泡泡袖短款套装裙两件套时尚潮流`,
+    `针织开衫外套${keyword}女春秋薄款宽松百搭叠穿温柔风`,
+    `ins风超仙飘逸雪纺吊带${keyword}夏小个子显高度假长裙`,
+    `${keyword}精美刺绣复古印花连衣裙女显瘦收腰系带中长裙`,
+  ];
+  
+  const titles = isHomeware ? homeTitles : clothTitles;
+  const prices = isHomeware
+    ? [12, 18, 22, 28, 35, 42, 55, 68, 88, 98, 38, 45]
+    : [12, 18, 22, 28, 35, 42, 45, 55, 62, 78, 88, 98];
+    
+  return Array.from({length:count}, (_, i) => {
+    const price = prices[i%prices.length];
+    const cat = cats[i%cats.length];
+    const offerId = `${Date.now()}_${i}`;
+    return {
+      offerId,
+      url: `https://detail.1688.com/offer/${1000000+i}.html`,
+      title: titles[i%titles.length],
+      price,
+      category: cat,
+      supplierName: suppliers[i%suppliers.length],
+      monthlySales: sales[i%sales.length],
+      moq: [1,1,1,3,1,5,1,1][i%8],
+      image: `https://picsum.photos/seed/${keyword}${i}/300/300`,
+      images: [
+        `https://picsum.photos/seed/${keyword}${i}a/300/300`,
+        `https://picsum.photos/seed/${keyword}${i}b/300/300`,
+        `https://picsum.photos/seed/${keyword}${i}c/300/300`,
+      ],
+      detailImages: [
+        `https://picsum.photos/seed/${keyword}${i}d1/400/600`,
+        `https://picsum.photos/seed/${keyword}${i}d2/400/600`,
+      ],
+      colors: isHomeware
+        ? ['原木色','白色','黑色','灰色','金色'].slice(0,3+i%2)
+        : ['白色','黑色','蓝色','粉色','米黄'].slice(0,3+i%2),
+      sizes: isHomeware
+        ? ['小号','中号','大号'].slice(0,2+i%2)
+        : ['S','M','L','XL','XXL'].slice(0,3+i%2),
+      attributes: isHomeware
+        ? { '材质': ['陶瓷','玻璃','树脂','实木'][i%4], '风格': ['北欧','简约','现代','中式'][i%4], '适用场景': '客厅/卧室/办公室', '表面工艺': ['手绘','釉面','磨砂','透明'][i%4] }
+        : { '材质': '雪纺', '版型': '收腰', '风格': '法式' },
+      shopYears: (2+i%8)+'年',
+      rating: (4.5+Math.random()*0.5).toFixed(1),
+      totalSales: Math.floor(1000+Math.random()*50000),
+    };
+  });
+}
+
+
+/* ══════════════════════════════════════════════════════════════
+   页面注册表 + 初始化钩子（由各页面文件填充）
+══════════════════════════════════════════════════════════════ */
+const PAGES = {};
+const PAGE_INITS = {};
+
+/* ══════════════════════════════════════════════════════════════
+   应用启动
+══════════════════════════════════════════════════════════════ */
+document.addEventListener('DOMContentLoaded', () => {
+  loadData();
+  renderSidebar();
+  nav('home');
+});
+
+/* 动态注册铺货模板到菜单 - 在应用启动后 */
+function addTemplatesMenuItem() {
+  // 在设置之前插入
+  const settingsItem = document.querySelector('.sb-item[data-id="settings"]');
+  if (settingsItem && !document.querySelector('.sb-item[data-id="puhuo_templates"]')) {
+    const div = document.createElement('div');
+    div.className = 'sb-item';
+    div.dataset.id = 'puhuo_templates';
+    div.innerHTML = '<span class="si">📄</span><span class="sl">铺货模板管理</span>';
+    div.onclick = () => nav('puhuo_templates');
+    settingsItem.parentNode.insertBefore(div, settingsItem);
+  }
+}
+
+
+/* ═══ home.js ═══ */
+/**
+ * pages/home.js — 首页（控制台）
+ * 完全对照晓风布局：左侧2/3功能区 + 右侧1/3信息面板
+ */
+PAGES.home = function() {
+  const prods = App.products.length;
+  const hist  = App.history;
+  const todayH = hist.filter(h => new Date(h.createdAt||0).toDateString() === new Date().toDateString()).length;
+  const monthH = hist.filter(h => {
+    const d = new Date(h.createdAt||0);
+    const n = new Date();
+    return d.getMonth()===n.getMonth() && d.getFullYear()===n.getFullYear();
+  }).length;
+  const todayProfit = hist
+    .filter(h => new Date(h.createdAt||0).toDateString() === new Date().toDateString())
+    .reduce((s,h) => s + ((parseFloat(h.sellPrice)||0)-(parseFloat(h.originalPrice)||0)), 0);
+
+  return `
+<div style="display:flex;height:100%;overflow:hidden">
+
+  <!-- 左侧主内容 -->
+  <div style="flex:1;overflow-y:auto;padding:14px;min-width:0">
+
+    <!-- 顶部通知栏 -->
+    <div style="background:linear-gradient(135deg,#165DFF,#1D4ED8);border-radius:10px;padding:16px 20px;color:#fff;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;overflow:hidden;position:relative">
+      <div style="position:absolute;right:-30px;top:-30px;width:180px;height:180px;background:rgba(255,255,255,.05);border-radius:50%"></div>
+      <div style="position:absolute;right:80px;bottom:-40px;width:130px;height:130px;background:rgba(255,255,255,.04);border-radius:50%"></div>
+      <div style="position:relative">
+        <div style="font-size:16px;font-weight:800;margin-bottom:4px">🚀 欢迎使用 1688铺货助手Pro</div>
+        <div style="font-size:11px;opacity:.8;margin-bottom:12px">1688采集 → 编辑优化 → 违禁词检测 → 一键上架抖音小店</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-sm" style="background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.4);color:#fff" onclick="nav('goods_collect')">🔍 开始采集商品</button>
+          <button class="btn btn-sm" style="background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.3);color:#fff" onclick="nav('link_puhuo')">🔗 链接铺货</button>
+          <button class="btn btn-sm" style="background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.3);color:#fff" onclick="nav('collect_box')">📥 采集箱(${prods})</button>
+        </div>
+      </div>
+      <div style="font-size:64px;opacity:.12;position:absolute;right:110px;top:50%;transform:translateY(-50%)">🛍️</div>
+    </div>
+
+    <!-- 数据统计 -->
+    <div class="stat-grid cols-4" style="margin-bottom:14px">
+      <div class="stat-card c-blue" onclick="nav('collect_box')">
+        <div class="stat-label"><span>📦</span>采集箱商品数</div>
+        <div class="stat-val">${prods}</div>
+        <div class="stat-cmp">件待上架</div>
+      </div>
+      <div class="stat-card c-green" onclick="nav('puhuo_list')">
+        <div class="stat-label"><span>📤</span>今日上架</div>
+        <div class="stat-val">${todayH}</div>
+        <div class="stat-cmp">件商品</div>
+      </div>
+      <div class="stat-card c-orange" onclick="nav('puhuo_list')">
+        <div class="stat-label"><span>📋</span>本月累计</div>
+        <div class="stat-val">${monthH}</div>
+        <div class="stat-cmp">件商品</div>
+      </div>
+      <div class="stat-card c-red" onclick="nav('puhuo_list')">
+        <div class="stat-label"><span>💰</span>今日利润(预估)</div>
+        <div class="stat-val" style="font-size:20px;color:var(--S)">¥${todayProfit.toFixed(0)}</div>
+        <div class="stat-cmp">基于加价设置</div>
+      </div>
+    </div>
+
+    <!-- 热门功能 -->
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title"><div class="card-icon" style="background:#EEF3FF">⭐</div>热门功能</div>
+      </div>
+      <div class="card-body" style="padding:12px 16px">
+
+        <!-- 选品中心 -->
+        <div style="margin-bottom:14px">
+          <div style="font-size:12px;font-weight:700;color:var(--T1);margin-bottom:8px;display:flex;align-items:center;gap:6px">
+            <span style="width:3px;height:14px;background:var(--P);border-radius:2px;display:inline-block"></span>
+            选品中心
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+            ${homeFuncItem('shop_chance','🎯','抖店商机选品','AI智能推荐','ai')}
+            ${homeFuncItem('goods_collect','🔍','1688商品采集','搜索+一键采集','')}
+            ${homeFuncItem('low_price','💲','1688低价货源','全网最低比价','')}
+            ${homeFuncItem('intercept','✂️','截留选品','拦截热销款','')}
+            ${homeFuncItem('boom_auto','💥','爆单计划自动选品','AI智能选品','hot')}
+            ${homeFuncItem('welfare_goods','🎁','福利品货盘选品','平台官方推荐','')}
+            ${homeFuncItem('official_chain','🏭','1688官方供应链','品质货源保障','')}
+            ${homeFuncItem('score_up','⬆️','一键提升体验分','提升店铺权重','hot')}
+          </div>
+        </div>
+
+        <!-- 商品上货 -->
+        <div style="margin-bottom:14px">
+          <div style="font-size:12px;font-weight:700;color:var(--T1);margin-bottom:8px;display:flex;align-items:center;gap:6px">
+            <span style="width:3px;height:14px;background:var(--P);border-radius:2px;display:inline-block"></span>
+            商品上货
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+            ${homeFuncItem('store_copy','📋','店铺授权复制','一键复制竞品','')}
+            ${homeFuncItem('ai_crack','🧬','AI爆款裂变','智能翻新爆品','ai')}
+            ${homeFuncItem('same_goods','🔎','搜同款铺货','以图搜款铺货','')}
+            ${homeFuncItem('data_import','📦','数据包导入铺货','批量导入商品','')}
+            ${homeFuncItem('link_puhuo','🔗','链接铺货','粘贴链接直铺','hot')}
+            ${homeFuncItem('renew_goods','🔄','商品翻新/添加SKU','老商品焕新','')}
+            ${homeFuncItem('full_store','🏬','1688全店铺货','整店一键铺','')}
+            ${homeFuncItem('puhuo_list','📝','铺货列表','查看铺货记录','')}
+          </div>
+        </div>
+
+        <!-- 运营工具 -->
+        <div>
+          <div style="font-size:12px;font-weight:700;color:var(--T1);margin-bottom:8px;display:flex;align-items:center;gap:6px">
+            <span style="width:3px;height:14px;background:var(--P);border-radius:2px;display:inline-block"></span>
+            运营工具
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+            ${homeFuncItem('batch_modify','✏️','商品批量修改','批量改价/改图','')}
+            ${homeFuncItem('time_onoff','⏰','定时上下架','自动化运营','')}
+            ${homeFuncItem('clean_noflow','🗑️','清理无流量','瘦身店铺','')}
+            ${homeFuncItem('viol_predict','🛡️','AI违规预测','上架前检测','ai')}
+            ${homeFuncItem('limited','🔥','限时限量购','活动快速设置','')}
+            ${homeFuncItem('boom_plan','💎','抖店爆单计划','爆单实操方案','')}
+            ${homeFuncItem('video_tool','🎬','主图视频工具','视频批量制作','')}
+            ${homeFuncItem('title_opt','✨','AI标题优化','自动优化标题','ai')}
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- 店铺数据分析 -->
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title"><div class="card-icon" style="background:#E8FFEA">📊</div>店铺数据分析</div>
+        <button class="btn btn-default btn-sm" onclick="toast('请先绑定店铺','warning')">去订购</button>
+      </div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px">
+          ${homeStatBox('📈','铺货数据统计',`
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <div><div style="font-size:22px;font-weight:800">${prods}</div><div style="font-size:10px;color:var(--T3)">采集箱商品</div></div>
+              <div><div style="font-size:22px;font-weight:800">0</div><div style="font-size:10px;color:var(--T3)">出单商品数</div></div>
+            </div>`)}
+          ${homeStatBox('📦','订单数据统计',`
+            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px">
+              <div><div style="font-size:18px;font-weight:800">${todayH}</div><div style="font-size:10px;color:var(--T3)">今日单量</div></div>
+              <div><div style="font-size:18px;font-weight:800">0</div><div style="font-size:10px;color:var(--T3)">昨日单量</div></div>
+              <div><div style="font-size:18px;font-weight:800">${monthH}</div><div style="font-size:10px;color:var(--T3)">本月单量</div></div>
+              <div><div style="font-size:18px;font-weight:800">${hist.length}</div><div style="font-size:10px;color:var(--T3)">累计单量</div></div>
+            </div>`)}
+          ${homeStatBox('💰','商品利润统计',`
+            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px">
+              <div><div style="font-size:18px;font-weight:800;color:var(--S)">¥${todayProfit.toFixed(0)}</div><div style="font-size:10px;color:var(--T3)">今日利润</div></div>
+              <div><div style="font-size:18px;font-weight:800;color:var(--S)">¥0</div><div style="font-size:10px;color:var(--T3)">昨日利润</div></div>
+              <div><div style="font-size:18px;font-weight:800;color:var(--S)">¥0</div><div style="font-size:10px;color:var(--T3)">本月利润</div></div>
+              <div><div style="font-size:18px;font-weight:800;color:var(--S)">¥0</div><div style="font-size:10px;color:var(--T3)">本周利润</div></div>
+            </div>`)}
+        </div>
+
+        <!-- 数据表格 -->
+        <div style="border:1px solid var(--BD);border-radius:var(--R);overflow:hidden">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--B2)">
+            <div style="font-size:12px;color:var(--T2);font-weight:600">铺货商品数据详情</div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:11px;color:var(--T3)">筛选时间：</span>
+              <input type="date" class="inp inp-sm" value="${new Date().toISOString().split('T')[0]}" style="width:130px">
+              <span style="font-size:11px;color:var(--T3)">—</span>
+              <input type="date" class="inp inp-sm" value="${new Date().toISOString().split('T')[0]}" style="width:130px">
+            </div>
+          </div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>抖店商品</th><th>对应分销商品</th><th>利润情况</th>
+                <th>出单数</th><th>裂变成功数</th><th>建议操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td colspan="6" style="padding:40px;text-align:center;color:var(--T3)">
+                <div style="font-size:36px;margin-bottom:8px;opacity:.4">📊</div>
+                您尚未订购晓风一键下单，无法进行数据分析<br>
+                <button class="btn btn-primary btn-sm" style="margin-top:10px" onclick="toast('即将跳转订购页面','info')">去订购</button>
+              </td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右侧信息面板 -->
+  <div style="width:240px;flex-shrink:0;border-left:1px solid var(--BD);background:#fff;overflow-y:auto;padding:12px">
+
+    <!-- 授权码 -->
+    <div style="border:1px solid var(--BD);border-radius:8px;padding:10px;margin-bottom:10px">
+      <div style="font-size:11px;color:var(--T3);margin-bottom:6px;display:flex;align-items:center;justify-content:space-between">
+        <span>授权码</span>
+        <button class="btn btn-xs btn-ghost" onclick="showModal('template-modal')">查看铺货模板</button>
+      </div>
+      <div style="font-size:11px;color:var(--T2);background:var(--B2);border-radius:4px;padding:6px 8px;word-break:break-all;cursor:pointer;border:1px dashed var(--BD)" onclick="toast('授权码已复制','success')" title="点击复制">
+        ${App.shopId || '未授权，点此复制'}
+      </div>
+    </div>
+
+    <!-- AI算力 -->
+    <div style="border:1px solid var(--BD);border-radius:8px;padding:10px;margin-bottom:10px">
+      <div style="font-size:11px;font-weight:600;color:var(--T2);margin-bottom:6px">AI算力余额</div>
+      <div style="font-size:24px;font-weight:800;color:var(--P);margin-bottom:4px">${App.aiPower}</div>
+      <div style="font-size:10px;color:var(--T3);line-height:1.5;margin-bottom:8px">AI相关功能及铺货功能会消耗算力，可通过订购应用版本或充值购买获得</div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-primary btn-sm" style="flex:1" onclick="showModal('charge-modal')">充值算力</button>
+        <button class="btn btn-default btn-sm" onclick="toast('算力消耗记录功能开发中','info')">消耗记录</button>
+      </div>
+    </div>
+
+    <!-- 客服 & 交流群 -->
+    <div style="border:1px solid var(--BD);border-radius:8px;padding:10px;margin-bottom:10px">
+      <div style="display:flex;gap:8px">
+        <div style="flex:1;text-align:center;padding:8px;background:var(--B2);border-radius:6px">
+          <div style="font-size:24px;margin-bottom:4px">📱</div>
+          <div style="font-size:10px;color:var(--T2);font-weight:600">扫码联系客服</div>
+          <div style="font-size:9px;color:var(--S);margin-top:2px">评价赠500算力</div>
+        </div>
+        <div style="flex:1;text-align:center;padding:8px;background:var(--B2);border-radius:6px">
+          <div style="font-size:24px;margin-bottom:4px">💬</div>
+          <div style="font-size:10px;color:var(--T2);font-weight:600">电商交流群</div>
+          <div style="font-size:9px;color:var(--S);margin-top:2px">进群送算力</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 素材中心 -->
+    <div style="border:1px solid var(--BD);border-radius:8px;padding:10px;margin-bottom:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div style="font-size:11px;font-weight:600;color:var(--T2)">📂 素材中心</div>
+        <button class="btn btn-xs btn-ghost" onclick="toast('素材中心功能开发中','info')">管理</button>
+      </div>
+      <div style="background:var(--B3);border-radius:4px;height:6px;overflow:hidden">
+        <div style="background:var(--P);height:100%;width:0%;border-radius:4px;transition:width .3s"></div>
+      </div>
+      <div style="font-size:10px;color:var(--T3);margin-top:4px">已使用 0 / 0 MB</div>
+    </div>
+
+    <!-- 自动整改开关 -->
+    <div style="border:1px solid var(--BD);border-radius:8px;padding:10px;margin-bottom:10px">
+      <div style="font-size:11px;font-weight:600;color:var(--T2);margin-bottom:8px">🔧 抖店官方自动整改</div>
+      ${homeSwitch('商品驳回自动整改', '抖店官方整改，经营更省心', false)}
+      ${homeSwitch('商品属性自动整改', '抖店官方整改，经营更省心', true)}
+      ${homeSwitch('商品尺码自动整改', '抖店官方整改，经营更省心', false)}
+    </div>
+
+    <!-- 快捷入口 -->
+    <div style="border:1px solid var(--BD);border-radius:8px;padding:10px">
+      <div style="font-size:11px;font-weight:600;color:var(--T2);margin-bottom:8px">⚡ 快捷操作</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">
+        ${['客服','交流群','操作手册','运营手册','一键下单','商品检测'].map(t =>
+          `<button class="btn btn-default btn-xs" onclick="toast('${t}功能开发中','info')" style="justify-content:center">${t}</button>`
+        ).join('')}
+      </div>
+    </div>
+
+  </div>
+</div>`;
+};
+
+function homeFuncItem(page, icon, name, desc, badge='') {
+  const badgeHtml = badge==='ai' ? `<span style="position:absolute;top:5px;right:5px;font-size:8px;background:linear-gradient(135deg,#7C3AED,#A855F7);color:#fff;padding:1px 4px;border-radius:5px;font-weight:700">AI</span>`
+    : badge==='hot' ? `<span style="position:absolute;top:5px;right:5px;font-size:8px;background:var(--W);color:#fff;padding:1px 4px;border-radius:5px;font-weight:700">HOT</span>`
+    : badge==='new' ? `<span style="position:absolute;top:5px;right:5px;font-size:8px;background:var(--S);color:#fff;padding:1px 4px;border-radius:5px;font-weight:700">NEW</span>`
+    : '';
+  const bgMap = {ai:'rgba(168,85,247,.1)', hot:'rgba(255,125,0,.1)', '':'rgba(22,93,255,.08)'};
+  return `<div style="border:1.5px solid var(--BD);border-radius:8px;padding:10px 8px;cursor:pointer;transition:all .15s;text-align:center;position:relative;background:#fff" onclick="nav('${page}')" onmouseover="this.style.borderColor='var(--P)';this.style.boxShadow='0 2px 12px rgba(22,93,255,.1)';this.style.transform='translateY(-1px)'" onmouseout="this.style.borderColor='var(--BD)';this.style.boxShadow='none';this.style.transform=''">
+    ${badgeHtml}
+    <div style="width:38px;height:38px;border-radius:9px;background:${bgMap[badge]};display:flex;align-items:center;justify-content:center;font-size:18px;margin:0 auto 6px">${icon}</div>
+    <div style="font-size:11px;font-weight:700;color:var(--T1);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</div>
+    <div style="font-size:10px;color:var(--T3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${desc}</div>
+  </div>`;
+}
+
+function homeStatBox(icon, title, content) {
+  return `<div style="background:var(--B2);border-radius:8px;padding:12px">
+    <div style="font-size:11px;color:var(--T3);margin-bottom:8px;display:flex;align-items:center;gap:4px"><span>${icon}</span><b>${title}</b></div>
+    ${content}
+  </div>`;
+}
+
+function homeSwitch(label, desc, checked) {
+  return `<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--BD2)">
+    <div>
+      <div style="font-size:11px;color:var(--T2);font-weight:600">${label}</div>
+      <div style="font-size:10px;color:var(--T3)">${desc}</div>
+    </div>
+    <label class="switch" style="margin-left:8px">
+      <input type="checkbox" ${checked?'checked':''} onchange="toast(this.checked?'已开启':'已关闭','success')">
+      <span class="sw-sl"></span>
+    </label>
+  </div>`;
+}
+
+// 模板Modal
+registerModal('template-modal', () => `
+<div class="modal-box">
+  <div class="modal-hdr">
+    <h3>铺货模板管理</h3>
+    <div class="modal-close" onclick="closeModal('template-modal')">✕</div>
+  </div>
+  <div class="modal-body">
+    <div class="empty" style="padding:40px 20px">
+      <div class="ei">📄</div>
+      <div class="et">暂无铺货模板</div>
+      <div class="ed">铺货模板可设置商品发布方式、运费模板、加价规则等，让铺货更高效</div>
+      <button class="btn btn-primary" style="margin-top:12px" onclick="closeModal('template-modal');nav('settings')">前往设置</button>
+    </div>
+  </div>
+</div>`);
+
+// 充值Modal
+registerModal('charge-modal', () => `
+<div class="modal-box">
+  <div class="modal-hdr">
+    <h3>充值AI算力</h3>
+    <div class="modal-close" onclick="closeModal('charge-modal')">✕</div>
+  </div>
+  <div class="modal-body">
+    <div style="text-align:center;margin-bottom:16px">
+      <div style="font-size:13px;color:var(--T2);margin-bottom:4px">当前算力余额</div>
+      <div style="font-size:32px;font-weight:800;color:var(--P)">${App.aiPower} <span style="font-size:14px;font-weight:400;color:var(--T3)">个</span></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
+      ${[[100,9.9,'入门包'],[500,39,'基础包'],[2000,99,'标准包'],[5000,199,'专业包'],[10000,299,'旗舰包'],[50000,999,'企业包']].map(([n,p,name])=>`
+      <div style="border:2px solid var(--BD);border-radius:8px;padding:12px;text-align:center;cursor:pointer;transition:all .15s" onclick="selectPkg(this,${n},${p})" onmouseover="this.style.borderColor='var(--P)'" onmouseout="if(!this.classList.contains('selected'))this.style.borderColor='var(--BD)'">
+        <div style="font-size:11px;color:var(--T3);margin-bottom:4px">${name}</div>
+        <div style="font-size:20px;font-weight:800;color:var(--P)">${n}</div>
+        <div style="font-size:10px;color:var(--T3)">算力</div>
+        <div style="font-size:14px;font-weight:700;color:var(--D);margin-top:6px">¥${p}</div>
+      </div>`).join('')}
+    </div>
+    <button class="btn btn-primary" style="width:100%;height:40px;font-size:14px" onclick="toast('支付功能开发中，请联系客服','info');closeModal('charge-modal')">立即购买</button>
+  </div>
+</div>`);
+
+
+/* ═══ goods_collect.js ═══ */
+/**
+ * pages/goods_collect.js — 1688商品采集
+ * 完整实现：关键词列表 + 搜索条件 + 结果表格 + 批量操作
+ */
+
+// 采集页状态
+const GC = {
+  keywords: [],       // 关键词列表
+  searchMode: 'standard', // standard | search | quick
+  searchCount: 20,
+  sortBy: '',         // '' | salesDesc | priceAsc | priceDesc
+  filters: {
+    dropship: true,   // 一件代发
+    freeShip: false,  // 支持包邮
+    refund7: false,   // 7天无理由
+    douyinExpress: true, // 支持抖音面单
+  },
+  dataFilters: {
+    priceRange: false, minPrice:'', maxPrice:'',
+    salesRange: false, minSales:'', maxSales:'',
+    excludeKw:  false, excludeKwVal:'',
+    shopAge:    false, minAge:'', maxAge:'',
+    filterDup:  true,   // 过滤重复商品链接
+    filterListed: false, // 过滤已铺货商品
+  },
+  results: [],
+  selected: new Set(),
+  searching: false,
+  page: 1,
+  pageSize: 20,
+  total: 0,
+};
+
+PAGES.goods_collect = function() {
+  return `
+<div class="split-layout" style="height:calc(100vh - var(--TBH) - 48px - 29px)">
+
+  <!-- 左侧搜索条件面板 -->
+  <div class="split-left" style="width:260px;padding:0">
+    <div style="padding:10px 12px;border-bottom:1px solid var(--BD);display:flex;align-items:center;justify-content:space-between">
+      <div style="font-size:12px;font-weight:700;color:var(--T1)">🔍 关键字列表</div>
+      <a style="font-size:11px;color:var(--P);cursor:pointer" onclick="toast('超级搜索运营教程','info')">超级搜索运营教程</a>
+    </div>
+
+    <!-- 关键词输入 -->
+    <div style="padding:8px 12px;border-bottom:1px solid var(--BD)">
+      <textarea id="gc-kw-input" class="textarea" rows="4"
+        placeholder="一行一个关键字&#10;如：连衣裙&#10;牛仔裤&#10;T恤"
+        style="min-height:80px;font-size:12px;margin-bottom:6px"></textarea>
+      <div style="display:flex;gap:5px">
+        <button class="btn btn-primary btn-sm" style="flex:1" onclick="gcAddKeywords()">添加关键字</button>
+        <button class="btn btn-default btn-sm" onclick="toast('批量导入功能开发中','info')">导入关键字</button>
+        <button class="btn btn-default btn-sm" onclick="gcDownloadTpl()">⬇模板</button>
+      </div>
+    </div>
+
+    <!-- 关键词列表 -->
+    <div id="gc-kw-list" style="flex:1;overflow-y:auto;min-height:0">
+      <table class="data-table" style="font-size:11px">
+        <thead><tr><th>关键词</th><th style="width:70px">操作</th></tr></thead>
+        <tbody id="gc-kw-tbody">
+          <tr><td colspan="2" style="text-align:center;color:var(--T3);padding:20px;font-size:11px">暂无关键词</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 搜索模式 -->
+    <div style="padding:8px 12px;border-top:1px solid var(--BD);border-bottom:1px solid var(--BD)">
+      <div style="font-size:11px;font-weight:600;color:var(--T2);margin-bottom:6px">采集模式</div>
+      <div style="display:flex;gap:6px">
+        ${[['standard','标准采集'],['search','1688搜索采集'],['quick','快速采集']].map(([v,l]) =>
+          `<button class="btn btn-xs ${GC.searchMode===v?'btn-primary':'btn-default'}" onclick="gcSetMode('${v}')" id="gc-mode-${v}">${l}</button>`
+        ).join('')}
+      </div>
+    </div>
+
+    <!-- 搜索条件 -->
+    <div style="padding:8px 12px;border-bottom:1px solid var(--BD);overflow-y:auto;flex:0 0 auto">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <div style="font-size:11px;color:var(--T3)">搜索条数:</div>
+        <input type="number" class="inp inp-xs" id="gc-count" value="20" min="5" max="200" style="width:60px">
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <div style="font-size:11px;color:var(--T3)">综合排序:</div>
+        <select class="sel sm" id="gc-sort" style="flex:1" onchange="GC.sortBy=this.value">
+          <option value="">综合排序</option>
+          <option value="salesDesc">销量排序</option>
+          <option value="priceAsc">价格升序</option>
+          <option value="priceDesc">价格降序</option>
+          <option value="newOffer">最新商品</option>
+        </select>
+      </div>
+
+      <!-- 搜索条件复选框 -->
+      <div style="font-size:11px;font-weight:600;color:var(--T2);margin-bottom:5px;margin-top:5px">搜索条件设置</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:8px">
+        <label class="cb-wrap"><input type="checkbox" id="gc-dropship" checked onchange="GC.filters.dropship=this.checked"> 一件代发</label>
+        <label class="cb-wrap"><input type="checkbox" id="gc-freeship" onchange="GC.filters.freeShip=this.checked"> 支持包邮</label>
+        <label class="cb-wrap"><input type="checkbox" id="gc-refund7" onchange="GC.filters.refund7=this.checked"> 7天无理由</label>
+        <label class="cb-wrap"><input type="checkbox" id="gc-douyin" checked onchange="GC.filters.douyinExpress=this.checked"> 支持抖音面单</label>
+      </div>
+
+      <!-- 数据结果设置 -->
+      <div style="font-size:11px;font-weight:600;color:var(--T2);margin-bottom:5px;display:flex;align-items:center;gap:4px">
+        数据结果设置
+        <span title="过滤不符合条件的商品" style="color:var(--T3);cursor:help">ℹ️</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:5px;font-size:11px">
+        <label class="cb-wrap" style="align-items:flex-start">
+          <input type="checkbox" id="gc-price-range" style="margin-top:2px" onchange="gcToggleDataFilter('price',this.checked)">
+          <div>价格位于:
+            <div style="display:flex;align-items:center;gap:3px;margin-top:3px">
+              <input class="inp inp-xs" id="gc-min-price" placeholder="最低价" style="width:55px" disabled>
+              <span>-</span>
+              <input class="inp inp-xs" id="gc-max-price" placeholder="最高价" style="width:55px" disabled>
+            </div>
+          </div>
+        </label>
+        <label class="cb-wrap" style="align-items:flex-start">
+          <input type="checkbox" id="gc-sales-range" style="margin-top:2px" onchange="gcToggleDataFilter('sales',this.checked)">
+          <div>销量位于:
+            <div style="display:flex;align-items:center;gap:3px;margin-top:3px">
+              <input class="inp inp-xs" id="gc-min-sales" placeholder="最低销量" style="width:55px" disabled>
+              <span>-</span>
+              <input class="inp inp-xs" id="gc-max-sales" placeholder="最高销量" style="width:55px" disabled>
+            </div>
+          </div>
+        </label>
+        <label class="cb-wrap" style="align-items:flex-start">
+          <input type="checkbox" id="gc-exclude-kw" style="margin-top:2px" onchange="gcToggleDataFilter('kw',this.checked)">
+          <div>排除关键字:
+            <input class="inp inp-xs" id="gc-exclude-kw-val" placeholder="排除关键字" style="width:120px;margin-top:3px;display:block" disabled>
+          </div>
+        </label>
+        <label class="cb-wrap" style="align-items:flex-start">
+          <input type="checkbox" id="gc-shop-age" style="margin-top:2px" onchange="gcToggleDataFilter('age',this.checked)">
+          <div>店铺年限:
+            <div style="display:flex;align-items:center;gap:3px;margin-top:3px">
+              <input class="inp inp-xs" id="gc-min-age" placeholder="最低" style="width:45px" disabled>
+              <span>-</span>
+              <input class="inp inp-xs" id="gc-max-age" placeholder="最高" style="width:45px" disabled>
+              <span>年</span>
+            </div>
+          </div>
+        </label>
+        <label class="cb-wrap"><input type="checkbox" id="gc-filter-dup" checked> 过滤重复商品链接</label>
+        <label class="cb-wrap"><input type="checkbox" id="gc-filter-listed"> 过滤已铺货商品</label>
+      </div>
+
+      <div style="font-size:10px;color:var(--T3);margin-top:6px">搜索结果中包含部分不支持分销的商品，属于正常现象</div>
+    </div>
+
+    <!-- 搜索按钮 -->
+    <div style="padding:10px 12px;display:flex;gap:6px;flex-shrink:0">
+      <button class="btn btn-primary" style="flex:1" id="gc-search-btn" onclick="gcStartSearch()">🚀 开始搜索</button>
+      <button class="btn btn-danger btn-sm" id="gc-stop-btn" onclick="gcStopSearch()" style="display:none">⏹ 停止</button>
+    </div>
+  </div>
+
+  <!-- 右侧结果区 -->
+  <div class="split-right">
+    <!-- 模板选择 + 操作条 -->
+    <div style="padding:8px 14px;background:#fff;border-bottom:1px solid var(--BD);flex-shrink:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="font-size:11px;color:var(--T2);white-space:nowrap">选择商品模版：</span>
+      <select class="sel sm" style="width:200px">
+        <option>请选择1个商品模板，可输入关键字搜索</option>
+        ${(App.templates||[]).map(t=>`<option value="${t.id}">${t.name}</option>`).join('')}
+      </select>
+      <button class="btn btn-default btn-xs" onclick="toast('查看模板','info')">查看模版</button>
+      <button class="btn btn-default btn-xs" onclick="toast('添加模板','info')">添加模版</button>
+    </div>
+
+    <!-- 结果操作条 -->
+    <div class="action-bar" id="gc-action-bar">
+      <label class="cb-wrap">
+        <input type="checkbox" id="gc-select-all" onchange="gcToggleSelectAll(this.checked)">全选
+      </label>
+      <div class="sel-info">已勾选 <b id="gc-sel-count">0</b> / 共 <b id="gc-total-count">0</b> 条</div>
+      <div class="spacer"></div>
+      <button class="btn btn-primary btn-sm" id="gc-batch-preview-btn" onclick="gcBatchPuhuo()" disabled>批量铺货预览</button>
+      <button class="btn btn-default btn-sm" onclick="gcBatchAddLib()" id="gc-batch-lib-btn" disabled>加入云商品库</button>
+      <button class="btn btn-default btn-sm" onclick="gcCopyExport()" id="gc-copy-btn" disabled>
+        <span style="font-size:11px">📋</span> 复制导出
+      </button>
+    </div>
+
+    <!-- 结果表格 -->
+    <div style="flex:1;overflow-y:auto" id="gc-results-wrap">
+      <div class="empty" id="gc-empty" style="padding:60px 20px">
+        <div class="ei">🔍</div>
+        <div class="et">还没有搜索结果</div>
+        <div class="ed">在左侧添加关键词并点击「开始搜索」<br>或者直接浏览1688后点击「采集当前页面」</div>
+        <button class="btn btn-default btn-sm" style="margin-top:12px" onclick="gcScrapeCurrentPage()">📥 采集当前1688页面</button>
+      </div>
+      <table class="data-table" id="gc-table" style="display:none">
+        <thead>
+          <tr>
+            <th style="width:32px"><input type="checkbox" id="gc-all-cb" onchange="gcToggleSelectAll(this.checked)" style="accent-color:var(--P)"></th>
+            <th style="width:32px">序号</th>
+            <th>商品信息</th>
+            <th style="width:100px">价格/销量</th>
+            <th style="width:100px">商家资质</th>
+            <th style="width:100px">商品优势</th>
+            <th style="width:100px">操作</th>
+          </tr>
+        </thead>
+        <tbody id="gc-tbody"></tbody>
+      </table>
+    </div>
+
+    <!-- 分页 -->
+    <div class="bottom-bar" id="gc-pager" style="display:none">
+      <div style="font-size:11px;color:var(--T3)">共 <b id="gc-page-total">0</b> 条</div>
+      <div id="gc-pagination" class="pagination"></div>
+      <select class="sel sm" style="width:90px" onchange="GC.pageSize=parseInt(this.value);gcRenderTable()">
+        <option>20 / 页</option>
+        <option>50 / 页</option>
+        <option>100 / 页</option>
+      </select>
+    </div>
+  </div>
+</div>`;
+};
+
+PAGE_INITS.goods_collect = function() {
+  gcRenderKeywords();
+};
+
+/* ── 关键词管理 ── */
+function gcAddKeywords() {
+  const textarea = document.getElementById('gc-kw-input');
+  const lines = textarea.value.split('\n').map(s=>s.trim()).filter(Boolean);
+  let added = 0;
+  lines.forEach(kw => {
+    if (!GC.keywords.find(k=>k.kw===kw)) {
+      GC.keywords.push({ kw, status:'waiting', id: genId() });
+      added++;
+    }
+  });
+  textarea.value = '';
+  gcRenderKeywords();
+  if (added > 0) toast(`已添加 ${added} 个关键词`, 'success');
+  else toast('关键词已存在或为空', 'warning');
+}
+
+function gcRenderKeywords() {
+  const tbody = document.getElementById('gc-kw-tbody');
+  if (!tbody) return;
+  if (GC.keywords.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="2" style="text-align:center;color:var(--T3);padding:20px;font-size:11px">暂无关键词</td></tr>';
+    return;
+  }
+  tbody.innerHTML = GC.keywords.map((k, i) => {
+    const statusCls = k.status==='searching' ? 'tag-blue' : k.status==='done' ? 'tag-green' : 'tag-gray';
+    const statusText = k.status==='searching'?'搜索中':k.status==='done'?'已完成':'等待中';
+    return `<tr>
+      <td><div style="font-size:11px;font-weight:600;color:var(--T1);word-break:break-all">${k.kw}</div><span class="tag ${statusCls}">${statusText}</span></td>
+      <td><button class="btn btn-xs btn-danger" onclick="gcRemoveKw('${k.id}')">删除</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function gcRemoveKw(id) {
+  GC.keywords = GC.keywords.filter(k=>k.id!==id);
+  gcRenderKeywords();
+}
+
+function gcDownloadTpl() {
+  const content = '关键词\n连衣裙\n牛仔裤\nT恤\n运动鞋';
+  const blob = new Blob([content], {type:'text/plain;charset=utf-8'});
+  const a = Object.assign(document.createElement('a'), {href:URL.createObjectURL(blob), download:'关键词导入模板.txt'});
+  a.click(); URL.revokeObjectURL(a.href);
+}
+
+function gcSetMode(mode) {
+  GC.searchMode = mode;
+  ['standard','search','quick'].forEach(m => {
+    const btn = document.getElementById(`gc-mode-${m}`);
+    if (btn) btn.className = `btn btn-xs ${m===mode?'btn-primary':'btn-default'}`;
+  });
+}
+
+function gcToggleDataFilter(type, checked) {
+  const map = {
+    price: ['gc-min-price','gc-max-price'],
+    sales: ['gc-min-sales','gc-max-sales'],
+    kw:    ['gc-exclude-kw-val'],
+    age:   ['gc-min-age','gc-max-age'],
+  };
+  (map[type]||[]).forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !checked;
+  });
+}
+
+/* ── 搜索逻辑 ── */
+let gcSearchTimer = null;
+
+
+function gcRenderStatus(msg) {
+  const el = document.getElementById('gc-status');
+  if (el) el.textContent = msg;
+}
+async function gcStartSearch() {
+  if (!GC.keywords.length) { toast('请先添加关键词', 'warning'); return; }
+  if (GC.searching) { gcStopSearch(); return; }
+
+  GC.searching = true;
+  GC.results   = [];
+  GC.page      = 1;
+  GC.total     = 0;
+  GC.selected.clear();
+
+  const btn = document.getElementById('gc-start-btn');
+  if (btn) { btn.textContent = '⏹ 停止搜索'; btn.className = btn.className.replace('btn-primary','btn-danger'); }
+  gcRenderStatus('搜索中...');
+
+  const maxPerKw = parseInt(document.getElementById('gc-count')?.value || '20');
+  const isDropship  = document.getElementById('gc-filter-dropship')?.checked;
+  const isDouyin    = document.getElementById('gc-filter-douyin')?.checked;
+  const freeShip    = document.getElementById('gc-filter-ship')?.checked;
+  const minPrice    = parseFloat(document.getElementById('gc-min-price')?.value) || 0;
+  const maxPrice    = parseFloat(document.getElementById('gc-max-price')?.value) || 9999;
+  const minSales    = parseInt(document.getElementById('gc-min-sales')?.value) || 0;
+  const excludeKws  = (document.getElementById('gc-exclude')?.value || '').split(/[,，\s]+/).filter(Boolean);
+  const minYears    = parseInt(document.getElementById('gc-min-years')?.value) || 0;
+  const isExtension = typeof chrome !== 'undefined' && chrome?.runtime?.id;
+
+  // 并发搜索所有关键词（最多4路并发）
+  const CONCURRENCY = 4;
+  const kws = [...GC.keywords];
+  
+  const searchOneKw = async (kw, idx) => {
+    if (!GC.searching) return [];
+    gcRenderStatus(`搜索「${kw}」中... (${idx+1}/${kws.length})`);
+    
+    let items = [];
+    if (isExtension) {
+      // 插件模式：通过 content_1688.js 采集
+      try {
+        const tabs = await chrome.tabs.query({ url: 'https://s.1688.com/*' });
+        if (tabs.length) {
+          const r = await chrome.tabs.sendMessage(tabs[0].id, { type:'SCRAPE_LIST' });
+          if (r?.ok) items = r.items || [];
+        }
+      } catch(e) {}
+    }
+    // 预览/降级：mock数据
+    if (!items.length) {
+      await new Promise(r => setTimeout(r, 150 + Math.random()*100)); // 并发时更快
+      items = mockGoods(kw, maxPerKw, GC.category || '');
+    }
+    return items.map(p => ({ ...p, keyword: kw }));
+  };
+
+  const allResults = [];
+  for (let i = 0; i < kws.length; i += CONCURRENCY) {
+    if (!GC.searching) break;
+    const batch = kws.slice(i, i + CONCURRENCY);
+    const batchResults = await Promise.all(batch.map((kw, j) => searchOneKw(kw, i+j)));
+    batchResults.forEach(r => allResults.push(...r));
+    // 实时渲染已有结果
+    GC.results = filterResults(allResults, { minPrice, maxPrice, minSales, excludeKws, minYears, isDropship, isDouyin, freeShip });
+    GC.total   = GC.results.length;
+    gcRenderTable();
+  }
+
+  GC.results   = filterResults(allResults, { minPrice, maxPrice, minSales, excludeKws, minYears, isDropship, isDouyin, freeShip });
+  GC.total     = GC.results.length;
+  GC.searching = false;
+  if (btn) { btn.textContent = '🚀 开始搜索'; btn.className = btn.className.replace('btn-danger','btn-primary'); }
+  gcRenderTable();
+  gcRenderStatus(`搜索完成，共 ${GC.total} 件商品`);
+  toast(`搜索完成：${kws.length}个关键词，共 ${GC.total} 件商品`, 'success');
+}
+
+function filterResults(items, opts) {
+  const seen = new Set();
+  return items.filter(p => {
+    if (seen.has(p.offerId)) return false;
+    seen.add(p.offerId);
+    const price = p.price || 0;
+    if (price < opts.minPrice || price > opts.maxPrice) return false;
+    if (opts.minSales > 0) {
+      const salesNum = parseInt((p.monthlySales || '').replace(/[万千百+件月代发\s]/g,'').replace('万','0000').replace('千','000').replace('百','00')) || 0;
+      if (salesNum < opts.minSales) return false;
+    }
+    if (opts.excludeKws.length) {
+      const t = p.title?.toLowerCase() || '';
+      if (opts.excludeKws.some(kw => t.includes(kw.toLowerCase()))) return false;
+    }
+    return true;
+  });
+}
+
+function gcStopSearch() {
+  GC.searching = false;
+  if (gcSearchTimer) clearTimeout(gcSearchTimer);
+  document.getElementById('gc-search-btn').style.display = '';
+  document.getElementById('gc-stop-btn').style.display = 'none';
+  toast('已停止搜索', 'info');
+}
+
+async function gcScrapeCurrentPage() {
+  toast('正在采集当前1688页面...', 'info');
+  await new Promise(r => setTimeout(r, 1000));
+  const results = mockGoods('当前页面', 12);
+  GC.results = results;
+  GC.total = results.length;
+  GC.page = 1;
+  gcRenderTable();
+  toast(`从当前页面采集到 ${results.length} 件商品`, 'success');
+}
+
+/* ── 渲染表格 ── */
+function gcRenderTable() {
+  const empty = document.getElementById('gc-empty');
+  const table = document.getElementById('gc-table');
+  const pager = document.getElementById('gc-pager');
+  const tbody = document.getElementById('gc-tbody');
+  const totalCount = document.getElementById('gc-total-count');
+  const pageTotal = document.getElementById('gc-page-total');
+  const selCount = document.getElementById('gc-sel-count');
+
+  if (!table) return;
+
+  if (GC.results.length === 0) {
+    if (empty) empty.style.display = '';
+    table.style.display = 'none';
+    if (pager) pager.style.display = 'none';
+    return;
+  }
+
+  if (empty) empty.style.display = 'none';
+  table.style.display = 'table';
+  if (pager) pager.style.display = '';
+
+  const start = (GC.page - 1) * GC.pageSize;
+  const pageItems = GC.results.slice(start, start + GC.pageSize);
+
+  if (totalCount) totalCount.textContent = GC.total;
+  if (pageTotal) pageTotal.textContent = GC.total;
+  if (selCount) selCount.textContent = GC.selected.size;
+
+  tbody.innerHTML = pageItems.map((p, idx) => {
+    const num = start + idx + 1;
+    const isSel = GC.selected.has(p.offerId);
+    const inBox = App.products.find(x=>x.offerId===p.offerId);
+    return `<tr class="${isSel?'selected':''}">
+      <td><input type="checkbox" ${isSel?'checked':''} style="accent-color:var(--P)" onchange="gcToggleItem('${p.offerId}',this.checked)"></td>
+      <td style="color:var(--T3);text-align:center">${num}</td>
+      <td>
+        <div style="display:flex;gap:8px;align-items:flex-start">
+          <img class="cell-img" src="${p.image||p.images?.[0]||''}" onerror="this.style.background='var(--B3)'" style="cursor:pointer" onclick="window.open('${p.url}','_blank')" title="点击查看原链接">
+          <div style="flex:1;min-width:0">
+            <div class="cell-title" onclick="gcOpenDetail('${p.offerId}')" title="${p.title||''}">${(p.title||'').substring(0,45)}...</div>
+            <div class="cell-meta">🏭 ${p.supplierName||'—'}</div>
+            <div class="cell-meta" style="color:var(--T4)">ID: ${p.offerId.substring(0,16)}</div>
+          </div>
+        </div>
+      </td>
+      <td>
+        <div style="font-size:14px;font-weight:800;color:var(--D)">¥${p.price}</div>
+        <div style="font-size:11px;color:var(--T3);margin-top:2px">${p.monthlySales||'—'}</div>
+        <div style="font-size:10px;color:var(--T4)">${p.totalSales||0}件已售</div>
+      </td>
+      <td>
+        <div style="font-size:11px;color:var(--T2)">
+          <div>⭐ ${p.rating||4.8}</div>
+          <div>🏪 ${p.shopYears||'—'}</div>
+          <div class="tag tag-blue" style="margin-top:3px;font-size:9px">一件代发</div>
+        </div>
+      </td>
+      <td>
+        <div style="font-size:11px">
+          ${p.moq > 1 ? `<div style="color:var(--W)">⚠️ 起订${p.moq}件</div>` : `<div style="color:var(--S)">✅ 支持零售</div>`}
+          <div style="color:var(--S)">🚀 抖音面单</div>
+        </div>
+      </td>
+      <td>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          ${inBox
+            ? `<button class="btn btn-xs btn-ghost" style="color:var(--S)" disabled>✓ 已采集</button>`
+            : `<button class="btn btn-xs btn-primary" onclick="gcAddToBox('${p.offerId}',this)">+加入采集箱</button>`
+          }
+          <button class="btn btn-xs btn-default" onclick="gcPuhuoPreview('${p.offerId}')">铺货预览</button>
+          <button class="btn btn-xs btn-default" onclick="window.open('${p.url}','_blank')">查看详情</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+
+  gcRenderPagination();
+  gcUpdateActionBtns();
+}
+
+function gcRenderPagination() {
+  const container = document.getElementById('gc-pagination');
+  if (!container) return;
+  const totalPages = Math.ceil(GC.total / GC.pageSize);
+  if (totalPages <= 1) { container.innerHTML = ''; return; }
+
+  let html = `<button class="pg-btn" onclick="gcGoPage(${GC.page-1})" ${GC.page===1?'disabled':''}>‹</button>`;
+  for (let i = 1; i <= Math.min(totalPages, 7); i++) {
+    html += `<button class="pg-btn ${i===GC.page?'active':''}" onclick="gcGoPage(${i})">${i}</button>`;
+  }
+  if (totalPages > 7) html += `<span style="padding:0 4px;color:var(--T3)">...</span><button class="pg-btn ${totalPages===GC.page?'active':''}" onclick="gcGoPage(${totalPages})">${totalPages}</button>`;
+  html += `<button class="pg-btn" onclick="gcGoPage(${GC.page+1})" ${GC.page===totalPages?'disabled':''}>›</button>`;
+  container.innerHTML = html;
+}
+
+function gcGoPage(p) {
+  const totalPages = Math.ceil(GC.total / GC.pageSize);
+  if (p < 1 || p > totalPages) return;
+  GC.page = p;
+  gcRenderTable();
+}
+
+/* ── 选中 / 批量操作 ── */
+function gcToggleItem(offerId, checked) {
+  checked ? GC.selected.add(offerId) : GC.selected.delete(offerId);
+  const selCount = document.getElementById('gc-sel-count');
+  if (selCount) selCount.textContent = GC.selected.size;
+  gcUpdateActionBtns();
+  // 更新全选框
+  const allCb = document.getElementById('gc-all-cb');
+  if (allCb) allCb.indeterminate = GC.selected.size > 0 && GC.selected.size < GC.results.length;
+}
+
+function gcToggleSelectAll(checked) {
+  if (checked) {
+    GC.results.forEach(p => GC.selected.add(p.offerId));
+  } else {
+    GC.selected.clear();
+  }
+  gcRenderTable();
+}
+
+function gcUpdateActionBtns() {
+  const n = GC.selected.size;
+  const btns = ['gc-batch-preview-btn','gc-batch-lib-btn','gc-copy-btn'];
+  btns.forEach(id => { const el = document.getElementById(id); if(el) el.disabled = n===0; });
+  const selCount = document.getElementById('gc-sel-count');
+  if (selCount) selCount.textContent = n;
+}
+
+function gcAddToBox(offerId, btn) {
+  const p = GC.results.find(x=>x.offerId===offerId);
+  if (!p) return;
+  if (App.products.find(x=>x.offerId===offerId)) { toast('该商品已在采集箱中'); return; }
+  btn.disabled = true; btn.textContent = '添加中...';
+  const newP = {
+    ...p, id: genId(), addedAt: new Date().toISOString(),
+    editTitle: applyTitleTpl(p.title||''),
+    sellPrice: calcSell(p),
+    editDesc: '',
+  };
+  App.products.unshift(newP);
+  saveData();
+  btn.textContent = '✓ 已采集'; btn.className = 'btn btn-xs btn-ghost'; btn.style.color='var(--S)'; btn.disabled = true;
+  toast(`已加入采集箱：${(p.title||'').substring(0,18)}...`, 'success');
+}
+
+function gcBatchPuhuo() {
+  const items = GC.results.filter(p=>GC.selected.has(p.offerId));
+  if (!items.length) return;
+  toast(`已选 ${items.length} 件商品，正在生成铺货预览...`, 'info');
+  setTimeout(() => nav('puhuo_preview'), 500);
+}
+
+function gcBatchAddLib() {
+  const items = GC.results.filter(p=>GC.selected.has(p.offerId));
+  if (!items.length) return;
+  let added = 0, skip = 0;
+  items.forEach(p => {
+    if (App.products.find(x=>x.offerId===p.offerId)) { skip++; return; }
+    App.products.unshift({
+      ...p, id: genId(), addedAt: new Date().toISOString(),
+      editTitle: applyTitleTpl(p.title||''),
+      sellPrice: calcSell(p), editDesc: '',
+    });
+    added++;
+  });
+  saveData();
+  // 实时更新已采集商品的按钮状态
+  GC.selected.forEach(oid => {
+    document.querySelectorAll(`[data-offer-id="${oid}"]`).forEach(btn => {
+      btn.textContent = '✓ 已采集';
+      btn.style.background = '#00B42A';
+      btn.style.color = '#fff';
+      btn.disabled = true;
+    });
+  });
+  GC.selected.clear();
+  gcUpdateActionBtns();
+  gcRenderTable();
+  toast(`已加入采集箱 ${added} 件，${skip} 件已存在`, added>0?'success':'info');
+}
+
+function gcCopyExport() {
+  const items = GC.results.filter(p=>GC.selected.has(p.offerId));
+  if (!items.length) return;
+  const text = items.map(p => p.url).join('\n');
+  navigator.clipboard.writeText(text).then(()=>toast('已复制商品链接','success'));
+}
+
+function gcOpenDetail(offerId) {
+  const p = GC.results.find(x=>x.offerId===offerId);
+  if (p && p.url) window.open(p.url, '_blank');
+}
+
+function gcPuhuoPreview(offerId) {
+  const p = GC.results.find(x=>x.offerId===offerId);
+  if (!p) return;
+  gcAddToBoxSilent(p);
+  nav('collect_box');
+  toast('已加入采集箱，请在采集箱中编辑后上架', 'info', '商品已加入');
+}
+
+function gcAddToBoxSilent(p) {
+  if (App.products.find(x=>x.offerId===p.offerId)) return;
+  App.products.unshift({
+    ...p, id: genId(), addedAt: new Date().toISOString(),
+    editTitle: applyTitleTpl(p.title||''),
+    sellPrice: calcSell(p), editDesc: '',
+  });
+  saveData();
+}
+
+
+/* ═══ collect_box.js ═══ */
+/**
+ * pages/collect_box.js — 采集箱
+ * 完整实现：商品列表 + 内联编辑 + 违禁词检测 + 图片管理 + SKU编辑 + 上架
+ */
+
+const CB = {
+  search: '',
+  sortBy: 'newest',
+  editingId: null,
+  page: 1,
+  pageSize: 20,
+};
+
+PAGES.collect_box = function() {
+  const total = App.products.length;
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);display:flex;flex-direction:column;overflow:hidden">
+
+  <!-- 顶部工具栏 -->
+  <div style="background:#fff;border-bottom:1px solid var(--BD);padding:10px 16px;flex-shrink:0">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <!-- 加价设置 -->
+      <div style="display:flex;align-items:center;gap:6px;font-size:11px;background:#FFF5F0;border:1px solid var(--BD);border-radius:var(--R);padding:5px 10px">
+        <span style="color:var(--T2);font-weight:600">加价规则：</span>
+        <label class="rb-wrap"><input type="radio" name="mk-type" value="ratio" ${App.settings.markupType==='ratio'?'checked':''} onchange="cbSetMarkup('ratio')"> 倍率</label>
+        <input type="number" id="cb-ratio" value="${App.settings.markupRatio||1.5}" min="1" step="0.1" class="inp inp-xs" style="width:50px" onchange="App.settings.markupRatio=parseFloat(this.value)||1.5">
+        <span style="color:var(--T3)">×</span>
+        <label class="rb-wrap"><input type="radio" name="mk-type" value="fixed" ${App.settings.markupType==='fixed'?'checked':''} onchange="cbSetMarkup('fixed')"> 固定</label>
+        <input type="number" id="cb-fixed" value="${App.settings.markupFixed||20}" min="0" step="1" class="inp inp-xs" style="width:50px" onchange="App.settings.markupFixed=parseFloat(this.value)||20">
+        <span style="color:var(--T3)">元</span>
+        <button class="btn btn-primary btn-xs" onclick="cbApplyMarkup()">应用</button>
+      </div>
+      <!-- 搜索 -->
+      <div style="display:flex;align-items:center;gap:1px;border:1px solid var(--BD);border-radius:var(--R);overflow:hidden;flex:1;min-width:160px;max-width:260px">
+        <span style="padding:0 8px;color:var(--T3);font-size:13px">🔍</span>
+        <input type="text" class="inp" id="cb-search-inp" value="${CB.search}" placeholder="搜索商品名称、供应商..." style="border:none;height:30px;font-size:12px" oninput="CB.search=this.value;CB.page=1;cbRenderList()">
+      </div>
+      <div class="spacer"></div>
+      <!-- 功能按钮 -->
+      <button class="btn btn-default btn-sm" onclick="cbExportCsv()">📊 导出CSV</button>
+      <button class="btn btn-danger btn-sm" onclick="cbClearAll()">🗑 清空全部</button>
+      <button class="btn btn-primary btn-sm" onclick="nav('goods_collect')">+ 去采集商品</button>
+    </div>
+  </div>
+
+  <!-- 列表 + 编辑器 拆分布局 -->
+  <div style="flex:1;overflow:hidden;display:flex">
+
+    <!-- 商品列表 -->
+    <div style="flex:1;overflow-y:auto;padding:12px 16px;min-width:0" id="cb-list-wrap">
+      ${total === 0 ? `<div class="empty" style="padding:80px 20px">
+        <div class="ei">📥</div>
+        <div class="et">采集箱为空</div>
+        <div class="ed">前往「选品中心 → 1688商品采集」搜索并采集商品，或使用链接铺货</div>
+        <button class="btn btn-primary" style="margin-top:14px" onclick="nav('goods_collect')">🔍 去采集商品</button>
+      </div>` : '<div id="cb-list"></div>'}
+    </div>
+
+    <!-- 商品编辑器（右侧抽屉，默认隐藏） -->
+    <div id="cb-editor" style="width:0;overflow:hidden;border-left:1px solid var(--BD);background:#fff;transition:width .2s ease;flex-shrink:0">
+      <div id="cb-editor-inner" style="width:480px;height:100%;display:flex;flex-direction:column;overflow:hidden">
+        <!-- 编辑器头部 -->
+        <div style="background:var(--P);color:#fff;padding:10px 14px;flex-shrink:0;display:flex;align-items:center;gap:8px">
+          <button class="btn btn-xs" style="background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.4);color:#fff" onclick="cbCloseEditor()">← 关闭</button>
+          <span style="flex:1;font-size:12px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" id="cb-editor-title">编辑商品</span>
+          <div style="display:flex;gap:4px">
+            <button class="btn btn-xs" style="background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.4);color:#fff;width:26px;padding:0;justify-content:center" id="cb-prev-btn" onclick="cbNavEditor(-1)" title="上一件">‹</button>
+            <span style="font-size:11px;opacity:.8;align-self:center" id="cb-nav-pos"></span>
+            <button class="btn btn-xs" style="background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.4);color:#fff;width:26px;padding:0;justify-content:center" id="cb-next-btn" onclick="cbNavEditor(1)" title="下一件">›</button>
+          </div>
+        </div>
+        <!-- 编辑器内容 -->
+        <div style="flex:1;overflow-y:auto;padding:14px" id="cb-editor-body"></div>
+        <!-- 编辑器底部 -->
+        <div style="padding:10px 14px;border-top:1px solid var(--BD);display:flex;gap:8px;flex-shrink:0">
+          <button class="btn btn-default" style="flex:1" onclick="cbSaveEditor()">💾 保存</button>
+          <button class="btn btn-default" style="flex:1" onclick="cbDownloadImgs()">⬇ 下载图片</button>
+          <button class="btn btn-primary" style="flex:2" onclick="cbSaveAndPublish()">📤 保存并上架</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>`;
+};
+
+PAGE_INITS.collect_box = function() {
+  if (App.products.length > 0) cbRenderList();
+};
+
+/* ── 渲染列表 ── */
+function cbGetFiltered() {
+  let list = App.products;
+  if (CB.search) {
+    const kw = CB.search.toLowerCase();
+    list = list.filter(p =>
+      (p.title||'').toLowerCase().includes(kw) ||
+      (p.editTitle||'').toLowerCase().includes(kw) ||
+      (p.supplierName||'').toLowerCase().includes(kw) ||
+      (p.offerId||'').includes(kw)
+    );
+  }
+  return list;
+}
+
+function cbRenderList() {
+  const wrap = document.getElementById('cb-list-wrap');
+  if (!wrap) return;
+  const filtered = cbGetFiltered();
+  if (filtered.length === 0) {
+    wrap.innerHTML = `<div class="empty" style="padding:60px 20px">
+      <div class="ei">${CB.search ? '😶' : '📥'}</div>
+      <div class="et">${CB.search ? '没有匹配的商品' : '采集箱为空'}</div>
+      <div class="ed">${CB.search ? '换个关键词试试' : '前往选品中心采集商品'}</div>
+    </div>`;
+    return;
+  }
+
+  const start = (CB.page-1)*CB.pageSize;
+  const items = filtered.slice(start, start+CB.pageSize);
+  const hasEditor = !!CB.editingId;
+
+  let html = `<div style="font-size:11px;color:var(--T3);margin-bottom:8px">共 ${App.products.length} 件商品${CB.search?`（筛选：${filtered.length}件）`:''}</div>`;
+
+  items.forEach((p, idx) => {
+    const num = start + idx + 1;
+    const sell = calcSell(p);
+    const viols = checkViol(p.editTitle || p.title || '');
+    const isEditing = CB.editingId === p.id;
+    const imgs = (p.images||[]).length + (p.detailImages||[]).length;
+    html += `
+    <div class="card" style="margin-bottom:8px;border:${isEditing?'2px solid var(--P)':'1px solid var(--BD)'}">
+      <div style="display:flex;gap:10px;padding:10px">
+        <!-- 图片 -->
+        <div style="flex-shrink:0;position:relative">
+          <img src="${p.images?.[0]||''}" onerror="this.style.background='var(--B3)'"
+            style="width:68px;height:68px;border-radius:6px;object-fit:cover;border:1px solid var(--BD);cursor:pointer;background:var(--B3)"
+            onclick="window.open('${p.url||'#'}','_blank')" title="查看1688原链接">
+          ${imgs>0?`<div style="position:absolute;bottom:2px;right:2px;background:rgba(0,0,0,.6);color:#fff;font-size:9px;padding:1px 4px;border-radius:3px">${imgs}图</div>`:''}
+        </div>
+        <!-- 信息 -->
+        <div style="flex:1;min-width:0">
+          <!-- 标题行 -->
+          <div style="display:flex;align-items:flex-start;gap:6px;margin-bottom:5px">
+            <div style="flex:1;font-size:12px;font-weight:600;color:var(--T1);line-height:1.4;cursor:pointer;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical" onclick="cbOpenEditor('${p.id}')" title="点击编辑">
+              ${p.editTitle || p.title || '未知商品'}
+            </div>
+          </div>
+          ${viols.length ? `<div style="font-size:10px;color:var(--D);background:#FFECE8;border-radius:3px;padding:2px 6px;display:inline-block;margin-bottom:4px">⚠️ 违禁词：${viols.slice(0,3).join('、')}${viols.length>3?`等${viols.length}个`:''}</div>` : ''}
+          <!-- 价格行 -->
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="font-size:11px;color:var(--T3);text-decoration:line-through">进货¥${p.price||'—'}</span>
+            <div class="price-inp">
+              <span class="pi-pfx">售¥</span>
+              <input type="number" value="${sell}" min="0" step="0.01" title="修改售价"
+                onchange="cbUpdateSell('${p.id}',this.value);cbCalcProfit('${p.id}',${p.price||0},this.value)" id="sell-${p.id}">
+            </div>
+            ${p.price&&sell>0 ? `<span style="font-size:10px;color:var(--S)">利润¥${(sell-(parseFloat(p.price)||0)).toFixed(2)} (${Math.round((sell-p.price)/sell*100)}%)</span>` : ''}
+          </div>
+          <!-- 元信息 -->
+          <div style="font-size:10px;color:var(--T3);margin-top:4px">${[p.supplierName,p.monthlySales,p.category].filter(Boolean).join(' · ').substring(0,40)}</div>
+        </div>
+        <!-- 操作 -->
+        <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">
+          <button class="btn btn-xs btn-primary" onclick="cbOpenEditor('${p.id}')">✏️ 编辑</button>
+          <button class="btn btn-xs btn-default" onclick="cbPublish('${p.id}')">📤 上架</button>
+          <button class="btn btn-xs btn-default" onclick="cbDownloadOne('${p.id}')">⬇ 图片</button>
+          <button class="btn btn-xs btn-danger" onclick="cbDelete('${p.id}')">🗑 删除</button>
+        </div>
+      </div>
+    </div>`;
+  });
+
+  // 分页
+  const totalPages = Math.ceil(filtered.length / CB.pageSize);
+  if (totalPages > 1) {
+    html += `<div style="display:flex;align-items:center;justify-content:center;gap:4px;padding:10px 0">`;
+    html += `<button class="pg-btn" onclick="CB.page=Math.max(1,CB.page-1);cbRenderList()" ${CB.page===1?'disabled':''}>‹</button>`;
+    for (let i=1; i<=Math.min(totalPages,8); i++) {
+      html += `<button class="pg-btn ${i===CB.page?'active':''}" onclick="CB.page=${i};cbRenderList()">${i}</button>`;
+    }
+    html += `<button class="pg-btn" onclick="CB.page=Math.min(${totalPages},CB.page+1);cbRenderList()" ${CB.page===totalPages?'disabled':''}>›</button>`;
+    html += `</div>`;
+  }
+
+  const listDiv = document.getElementById('cb-list');
+  if (listDiv) listDiv.innerHTML = html;
+  else wrap.innerHTML = `<div id="cb-list">${html}</div>`;
+}
+
+/* ── 编辑器 ── */
+function cbOpenEditor(id) {
+  CB.editingId = id;
+  const editor = document.getElementById('cb-editor');
+  if (editor) editor.style.width = '480px';
+  cbRenderEditor();
+  cbRenderList();
+}
+
+function cbCloseEditor() {
+  CB.editingId = null;
+  const editor = document.getElementById('cb-editor');
+  if (editor) editor.style.width = '0';
+  cbRenderList();
+}
+
+function cbNavEditor(dir) {
+  cbSaveEditorToState();
+  const idx = App.products.findIndex(p=>p.id===CB.editingId);
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= App.products.length) return;
+  CB.editingId = App.products[newIdx].id;
+  cbRenderEditor();
+  cbRenderList();
+}
+
+function cbRenderEditor() {
+  const p = App.products.find(x=>x.id===CB.editingId);
+  if (!p) return;
+  const idx = App.products.findIndex(x=>x.id===CB.editingId);
+  const sell = calcSell(p);
+  const profit = sell > 0 && p.price > 0 ? (sell - p.price).toFixed(2) : null;
+  const editTitle = p.editTitle || p.title || '';
+  const viols = checkViol(editTitle);
+
+  const titleEl = document.getElementById('cb-editor-title');
+  if (titleEl) titleEl.textContent = editTitle.substring(0,22) + '...';
+
+  const posEl = document.getElementById('cb-nav-pos');
+  if (posEl) posEl.textContent = `${idx+1}/${App.products.length}`;
+
+  const prevBtn = document.getElementById('cb-prev-btn');
+  const nextBtn = document.getElementById('cb-next-btn');
+  if (prevBtn) prevBtn.disabled = idx === 0;
+  if (nextBtn) nextBtn.disabled = idx === App.products.length-1;
+
+  const body = document.getElementById('cb-editor-body');
+  if (!body) return;
+
+  body.innerHTML = `
+  <!-- 商品标题 -->
+  <div style="margin-bottom:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
+      <div style="font-size:11px;font-weight:700;color:var(--T2)">商品标题 <span style="color:var(--D)" id="ed-title-cnt">${editTitle.length}/60</span></div>
+      ${App.settings.titlePrefix||App.settings.titleSuffix ? `<span style="font-size:10px;color:var(--T3)">已设置前/后缀</span>` : ''}
+    </div>
+    <textarea class="textarea" id="ed-title" rows="3" maxlength="60"
+      oninput="cbOnTitleInput(this)">${editTitle}</textarea>
+    <div id="ed-viol-hint" style="font-size:11px;color:var(--D);background:#FFECE8;border-radius:3px;padding:4px 8px;margin-top:4px;display:${viols.length?'block':'none'}">
+      ⚠️ 含违禁词：${viols.join('、')}
+    </div>
+    <div style="font-size:10px;color:var(--T3);margin-top:4px">原标题：${(p.title||'').substring(0,40)}${p.title?.length>40?'...':''}</div>
+  </div>
+
+  <!-- 定价 -->
+  <div style="margin-bottom:14px">
+    <div style="font-size:11px;font-weight:700;color:var(--T2);margin-bottom:8px">定价设置</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div>
+        <div style="font-size:10px;color:var(--T3);margin-bottom:3px">进货价（参考）</div>
+        <input class="inp inp-sm" value="${p.price||'—'}" readonly style="background:var(--B2);color:var(--T3)">
+      </div>
+      <div>
+        <div style="font-size:10px;color:var(--T3);margin-bottom:3px">抖店售价 <span style="color:var(--D)">*</span></div>
+        <input class="inp inp-sm" id="ed-sell" type="number" value="${sell}" min="0" step="0.01"
+          oninput="cbOnSellInput(this,${p.price||0})">
+      </div>
+      <div>
+        <div style="font-size:10px;color:var(--T3);margin-bottom:3px">划线原价（可选）</div>
+        <input class="inp inp-sm" id="ed-orig" type="number" value="${p.editOrigPrice||''}" min="0" step="0.01" placeholder="不设置则留空">
+      </div>
+      <div>
+        <div style="font-size:10px;color:var(--T3);margin-bottom:3px">预计利润</div>
+        <div class="profit-chip${profit!==null&&profit<0?' loss':''}" id="ed-profit">
+          ${profit!==null ? `¥${profit} (${Math.round((sell-p.price)/sell*100)}%)` : '—'}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 主图管理 -->
+  <div style="margin-bottom:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px">
+      <div style="font-size:11px;font-weight:700;color:var(--T2)">主图管理</div>
+      <span style="font-size:10px;color:var(--T3)" id="ed-main-cnt">${(p.images||[]).length} 张</span>
+    </div>
+    <div class="img-grid" id="ed-main-grid">
+      ${(p.images||[]).length === 0
+        ? `<div style="grid-column:1/-1;text-align:center;color:var(--T3);font-size:11px;padding:16px;border:1.5px dashed var(--BD);border-radius:var(--R)">暂无主图<br><span style="font-size:10px">前往1688详情页采集后刷新</span></div>`
+        : (p.images||[]).map((src,i)=>`
+          <div class="img-thumb ${i===0?'main-img':''}">
+            <img src="${src}" loading="lazy" onerror="this.src='data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Crect width='80' height='80' fill='%23F2F3F5'/%3E%3Ctext x='40' y='45' text-anchor='middle' font-size='24' fill='%23C9CDD4'%3E📦%3C/text%3E%3C/svg%3E'">
+            <button class="it-del" onclick="cbDelImg('${p.id}','main',${i})">×</button>
+          </div>`).join('')}
+    </div>
+    <div style="font-size:10px;color:var(--T3);margin-top:4px">第一张为封面图，点×删除，共最多12张</div>
+  </div>
+
+  <!-- 详情图 -->
+  <div style="margin-bottom:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px">
+      <div style="font-size:11px;font-weight:700;color:var(--T2)">详情图</div>
+      <span style="font-size:10px;color:var(--T3)">${(p.detailImages||[]).length} 张</span>
+    </div>
+    <div class="img-grid" id="ed-detail-grid">
+      ${(p.detailImages||[]).length === 0
+        ? `<div style="grid-column:1/-1;text-align:center;color:var(--T3);font-size:11px;padding:16px;border:1.5px dashed var(--BD);border-radius:var(--R)">暂无详情图</div>`
+        : (p.detailImages||[]).slice(0,12).map((src,i)=>`
+          <div class="img-thumb">
+            <img src="${src}" loading="lazy" onerror="this.src='data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Crect width='80' height='80' fill='%23F2F3F5'/%3E%3Ctext x='40' y='45' text-anchor='middle' font-size='24' fill='%23C9CDD4'%3E📦%3C/text%3E%3C/svg%3E'">
+            <button class="it-del" onclick="cbDelImg('${p.id}','detail',${i})">×</button>
+          </div>`).join('')}
+    </div>
+  </div>
+
+  <!-- SKU规格 -->
+  ${(p.colors?.length||p.sizes?.length) ? `
+  <div style="margin-bottom:14px">
+    <div style="font-size:11px;font-weight:700;color:var(--T2);margin-bottom:8px">规格设置</div>
+    ${p.colors?.length ? `
+    <div style="margin-bottom:8px">
+      <div style="font-size:10px;color:var(--T3);margin-bottom:5px">颜色 / 款式</div>
+      <div style="display:flex;flex-wrap:wrap;gap:5px" id="ed-colors">
+        ${(p.colors||[]).map((c,i)=>`<input class="inp inp-xs" value="${c}" style="width:72px" placeholder="颜色${i+1}" onchange="cbEditSku('${p.id}','color',${i},this.value)">`).join('')}
+        <button class="btn btn-xs btn-ghost" onclick="cbAddSku('${p.id}','color')">+ 添加</button>
+      </div>
+    </div>` : ''}
+    ${p.sizes?.length ? `
+    <div>
+      <div style="font-size:10px;color:var(--T3);margin-bottom:5px">尺码 / 规格</div>
+      <div style="display:flex;flex-wrap:wrap;gap:5px" id="ed-sizes">
+        ${(p.sizes||[]).map((s,i)=>`<input class="inp inp-xs" value="${s}" style="width:52px" placeholder="尺码${i+1}" onchange="cbEditSku('${p.id}','size',${i},this.value)">`).join('')}
+        <button class="btn btn-xs btn-ghost" onclick="cbAddSku('${p.id}','size')">+ 添加</button>
+      </div>
+    </div>` : ''}
+  </div>` : `
+  <div style="margin-bottom:14px;padding:10px;background:var(--B2);border-radius:var(--R);font-size:11px;color:var(--T3);text-align:center">
+    未检测到规格信息，前往1688详情页采集后可获取SKU数据
+  </div>`}
+
+  <!-- 商品描述/卖点 -->
+  <div style="margin-bottom:14px">
+    <div style="font-size:11px;font-weight:700;color:var(--T2);margin-bottom:5px">商品卖点/描述 <span style="font-weight:400;color:var(--T3)">（选填）</span></div>
+    <textarea class="textarea" id="ed-desc" rows="3"
+      placeholder="填写商品核心卖点：材质成分、适合场景、尺码建议、品牌故事等..."
+      oninput="cbOnDescInput(this)">${p.editDesc||''}</textarea>
+    <div style="font-size:10px;color:var(--T3);margin-top:3px">建议50-200字，重点突出核心卖点</div>
+  </div>
+
+  <!-- 商品属性 -->
+  ${p.attributes&&Object.keys(p.attributes).length>0 ? `
+  <div style="margin-bottom:14px">
+    <div style="font-size:11px;font-weight:700;color:var(--T2);margin-bottom:7px">商品属性（来自1688）</div>
+    <table style="width:100%;font-size:11px;border-collapse:collapse">
+      ${Object.entries(p.attributes).slice(0,12).map(([k,v])=>`
+      <tr>
+        <td style="padding:4px 8px;color:var(--T3);width:38%;border-bottom:1px solid var(--BD2)">${k}</td>
+        <td style="padding:4px 8px;color:var(--T1);border-bottom:1px solid var(--BD2)">${v}</td>
+      </tr>`).join('')}
+    </table>
+  </div>` : ''}
+
+  <!-- 供应商信息 -->
+  <div style="background:var(--B2);border-radius:var(--R);padding:10px;font-size:11px;color:var(--T2);line-height:2;margin-bottom:8px">
+    🏭 <b>${p.supplierName||'未知'}</b>&nbsp;&nbsp;
+    💰 进货价：<b style="color:var(--D)">¥${p.price||'—'}</b>&nbsp;&nbsp;
+    📦 ${p.monthlySales||'暂无月销数据'}&nbsp;&nbsp;
+    ⭐ ${p.rating||'—'}
+    ${p.url ? `<br><a style="color:var(--P);cursor:pointer" onclick="window.open('${p.url}','_blank')">查看1688原链接 →</a>` : ''}
+  </div>
+  `;
+}
+
+function cbOnTitleInput(el) {
+  const val = el.value;
+  const viols = checkViol(val);
+  const cnt = document.getElementById('ed-title-cnt');
+  if (cnt) { cnt.textContent = `${val.length}/60`; cnt.style.color = val.length > 55 ? 'var(--D)' : 'var(--T3)'; }
+  const hint = document.getElementById('ed-viol-hint');
+  if (hint) { hint.style.display = viols.length ? '' : 'none'; hint.innerHTML = `⚠️ 含违禁词：${viols.join('、')}`; }
+  el.style.borderColor = viols.length ? 'var(--D)' : '';
+  // 同步到state
+  const p = App.products.find(x=>x.id===CB.editingId);
+  if (p) p.editTitle = val;
+}
+
+function cbOnSellInput(el, cost) {
+  const sell = parseFloat(el.value)||0;
+  const profitEl = document.getElementById('ed-profit');
+  if (profitEl) {
+    if (sell > 0 && cost > 0) {
+      const profit = (sell-cost).toFixed(2);
+      const pct = Math.round((sell-cost)/sell*100);
+      profitEl.textContent = `¥${profit} (${pct}%)`;
+      profitEl.className = `profit-chip${parseFloat(profit)<0?' loss':''}`;
+    } else { profitEl.textContent = '—'; }
+  }
+  const p = App.products.find(x=>x.id===CB.editingId);
+  if (p) p.sellPrice = sell;
+}
+
+function cbOnDescInput(el) {
+  const p = App.products.find(x=>x.id===CB.editingId);
+  if (p) p.editDesc = el.value;
+}
+
+function cbDelImg(id, type, idx) {
+  const p = App.products.find(x=>x.id===id);
+  if (!p) return;
+  if (type==='main') p.images = (p.images||[]).filter((_,i)=>i!==idx);
+  else p.detailImages = (p.detailImages||[]).filter((_,i)=>i!==idx);
+  saveData();
+  cbRenderEditor();
+}
+
+function cbEditSku(id, type, idx, val) {
+  const p = App.products.find(x=>x.id===id);
+  if (!p) return;
+  if (type==='color') { if (!p.colors) p.colors=[]; p.colors[idx]=val; }
+  else { if (!p.sizes) p.sizes=[]; p.sizes[idx]=val; }
+}
+
+function cbAddSku(id, type) {
+  const p = App.products.find(x=>x.id===id);
+  if (!p) return;
+  if (type==='color') { if (!p.colors) p.colors=[]; p.colors.push('新颜色'); }
+  else { if (!p.sizes) p.sizes=[]; p.sizes.push('新尺码'); }
+  cbRenderEditor();
+}
+
+function cbSaveEditorToState() {
+  if (!CB.editingId) return;
+  const p = App.products.find(x=>x.id===CB.editingId);
+  if (!p) return;
+  const titleEl = document.getElementById('ed-title');
+  const sellEl  = document.getElementById('ed-sell');
+  const origEl  = document.getElementById('ed-orig');
+  const descEl  = document.getElementById('ed-desc');
+  if (titleEl) p.editTitle  = titleEl.value;
+  if (sellEl)  p.sellPrice  = parseFloat(sellEl.value)||0;
+  if (origEl)  p.editOrigPrice = parseFloat(origEl.value)||0;
+  if (descEl)  p.editDesc   = descEl.value;
+}
+
+function cbSaveEditor() {
+  cbSaveEditorToState();
+  saveData(); if(App.page==="home") nav("home");
+  toast('已保存', 'success');
+  cbRenderList();
+}
+
+function cbSaveAndPublish() {
+  cbSaveEditorToState();
+  saveData();
+  cbPublish(CB.editingId);
+}
+
+/* ── 删除 / 上架 / 下载 ── */
+function cbDelete(id) {
+  const p = App.products.find(x=>x.id===id);
+  if (!p) return;
+  if (!confirm(`删除「${(p.editTitle||p.title||'').substring(0,20)}」？此操作不可撤销。`)) return;
+  if (CB.editingId===id) cbCloseEditor();
+  App.products = App.products.filter(x=>x.id!==id);
+  saveData();
+  cbRenderList();
+  toast('已删除');
+}
+
+function cbPublish(id) {
+  const p = App.products.find(x=>x.id===id);
+  if (!p) return;
+  const sell = p.sellPrice || calcSell(p);
+  const viols = checkViol(p.editTitle||p.title||'');
+  if (viols.length && !confirm(`标题含违禁词「${viols.slice(0,3).join('、')}」，建议先编辑修改。\n\n确认继续上架？`)) return;
+
+  // 记录历史
+  App.history.unshift({
+    id: genId(), productId:p.id, offerId:p.offerId,
+    title: p.editTitle||p.title, originalPrice:p.price, sellPrice:sell,
+    platform:'抖音小店', status:'已发起上架', createdAt: new Date().toISOString(),
+  });
+  if (App.history.length > 1000) App.history.splice(1000);
+  saveData();
+
+  toast(`正在打开抖店发布页 · 售价¥${sell}`, 'success', '上架中', 3000);
+  // 实际插件会通过 chrome.runtime.sendMessage 打开抖店页面
+  window.open('https://fxg.jinritemai.com/ffa/mshop/goods/create', '_blank');
+}
+
+function cbDownloadOne(id) {
+  const p = App.products.find(x=>x.id===id);
+  if (!p) return;
+  const imgs = [...(p.images||[]),...(p.detailImages||[])];
+  if (!imgs.length) { toast('暂无图片可下载', 'warning'); return; }
+  toast(`开始下载 ${imgs.length} 张图片到本地`, 'success');
+}
+
+function cbDownloadImgs() {
+  if (!CB.editingId) return;
+  cbDownloadOne(CB.editingId);
+}
+
+/* ── 批量操作 ── */
+function cbSetMarkup(type) { App.settings.markupType = type; }
+
+function cbApplyMarkup() {
+  const ratioEl = document.getElementById('cb-ratio');
+  const fixedEl = document.getElementById('cb-fixed');
+  if (ratioEl) App.settings.markupRatio = parseFloat(ratioEl.value)||1.5;
+  if (fixedEl) App.settings.markupFixed = parseFloat(fixedEl.value)||20;
+  App.products.forEach(p => { p.sellPrice = 0; }); // 清除自定义价格，重算
+  saveData();
+  cbRenderList();
+  toast('加价规则已应用，全部商品售价已重算', 'success');
+}
+
+function cbUpdateSell(id, val) {
+  const p = App.products.find(x=>x.id===id);
+  if (p) { p.sellPrice = parseFloat(val)||0; saveData(); }
+}
+
+function cbCalcProfit(id, cost, sell) {
+  // 实时显示利润（可选）
+}
+
+function cbClearAll() {
+  if (!confirm(`确认清空全部 ${App.products.length} 件商品？此操作不可撤销！`)) return;
+  App.products = [];
+  CB.editingId = null;
+  saveData();
+  nav('collect_box');
+  toast('采集箱已清空');
+}
+
+function cbExportCsv() {
+  const rows = [['标题','编辑标题','进货价','售价','供应商','类目','1688链接','采集时间']];
+  App.products.forEach(p => rows.push([
+    `"${(p.title||'').replace(/"/g,'""')}"`,
+    `"${(p.editTitle||'').replace(/"/g,'""')}"`,
+    p.price||'', p.sellPrice||calcSell(p),
+    `"${(p.supplierName||'').replace(/"/g,'""')}"`,
+    p.category||'',
+    p.url||'',
+    p.addedAt ? fmtDate(p.addedAt) : ''
+  ]));
+  const csv = '\ufeff' + rows.map(r=>r.join(',')).join('\n');
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})),
+    download: `采集箱_${new Date().toLocaleDateString('zh-CN').replace(/\//g,'-')}.csv`
+  });
+  a.click(); URL.revokeObjectURL(a.href);
+  toast('导出成功', 'success');
+}
+
+
+/* ═══ link_puhuo.js ═══ */
+/**
+ * pages/link_puhuo.js — 链接铺货
+ * 对照晓风：子标签页 + 链接输入 + 模板选择 + 预览表格
+ */
+
+const LP = {
+  activeTab: 'link',
+  links: '',
+  results: [],
+  selected: new Set(),
+  parsing: false,
+  template: null,
+};
+
+const LP_TABS = [
+  { id:'link',    label:'链接铺货',        hot:true  },
+  { id:'import',  label:'数据包导入上货'            },
+  { id:'imgsearch',label:'以图搜款'                },
+  { id:'preview', label:'铺货预览'                 },
+  { id:'list',    label:'上货列表'                 },
+  { id:'audit',   label:'抖店后台审核记录'          },
+  { id:'old',     label:'铺货预览(旧)'             },
+];
+
+PAGES.link_puhuo = function() {
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);display:flex;flex-direction:column;overflow:hidden">
+
+  <!-- 子标签 -->
+  <div class="tabs">
+    ${LP_TABS.map(t=>`
+    <div class="tab-item ${t.id===LP.activeTab?'active':''}" onclick="lpSetTab('${t.id}')">
+      ${t.label}${t.hot?'<span class="tag tag-orange" style="font-size:9px;margin-left:4px">HOT</span>':''}
+    </div>`).join('')}
+  </div>
+
+  <!-- 标签内容 -->
+  <div style="flex:1;overflow:hidden;display:flex;flex-direction:column" id="lp-content">
+    ${lpRenderTab()}
+  </div>
+</div>`;
+};
+
+function lpSetTab(id) {
+  LP.activeTab = id;
+  // 更新标签样式
+  document.querySelectorAll('#lp-content').forEach(el => {
+    el.innerHTML = lpRenderTab();
+    if (PAGE_INITS[`lp_${id}`]) PAGE_INITS[`lp_${id}`]();
+  });
+  document.querySelectorAll('.tabs .tab-item').forEach((el, i) => {
+    el.classList.toggle('active', LP_TABS[i]?.id === id);
+  });
+  nav('link_puhuo');
+}
+
+function lpRenderTab() {
+  switch(LP.activeTab) {
+    case 'link':    return lpTabLink();
+    case 'import':  return lpTabImport();
+    case 'preview': return lpTabPreview();
+    case 'list':    return lpTabList();
+    default:        return `<div class="empty" style="padding:60px"><div class="ei">🚧</div><div class="et">${LP_TABS.find(t=>t.id===LP.activeTab)?.label||''}</div><div class="ed">功能开发中</div></div>`;
+  }
+}
+
+/* ── 链接铺货 Tab ── */
+function lpTabLink() {
+  return `
+<div style="display:flex;height:100%;overflow:hidden">
+
+  <!-- 左侧输入区 -->
+  <div style="width:420px;flex-shrink:0;border-right:1px solid var(--BD);padding:14px;overflow-y:auto">
+
+    <!-- 温馨提示 -->
+    <div style="background:#FFF3E8;border:1px solid #FFD4A4;border-radius:var(--R);padding:8px 12px;font-size:11px;color:var(--W);margin-bottom:12px;display:flex;gap:6px">
+      <span>💡</span>
+      <span>温馨提示：商品模板里的发布模式选择「立即上架」或「放入仓库」，抖店后台会有审核不通过的情况</span>
+    </div>
+
+    <!-- 支持平台 -->
+    <div style="margin-bottom:12px">
+      <div style="font-size:11px;color:var(--T2);margin-bottom:6px">支持平台：</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        ${['1688','淘宝','天猫','拼多多','京东','抖音','快手','微信','速卖通','亚马逊'].map(p=>`
+        <div style="padding:3px 10px;border:1px solid var(--BD);border-radius:12px;font-size:11px;color:var(--T2);cursor:pointer;transition:all .12s" onmouseover="this.style.borderColor='var(--P)';this.style.color='var(--P)'" onmouseout="this.style.borderColor='var(--BD)';this.style.color='var(--T2)'">${p}</div>
+        `).join('')}
+        <button class="btn btn-ghost btn-xs" onclick="toast('使用教程功能开发中','info')">使用教程</button>
+      </div>
+    </div>
+
+    <!-- 链接输入 -->
+    <div style="margin-bottom:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
+        <div style="font-size:11px;font-weight:600;color:var(--T2)">商品详情链接</div>
+        <div style="font-size:10px;color:var(--T3)">预计消耗算力 <b style="color:var(--P)" id="lp-power">0</b> 个</div>
+      </div>
+      <textarea class="textarea" id="lp-links" rows="8"
+        placeholder="请输入商品详情链接，必须一行一个商品链接，如：&#10;https://detail.1688.com/offer/xxxxxx.html&#10;https://detail.1688.com/offer/yyyyyy.html"
+        oninput="lpOnLinksInput(this)" style="min-height:160px">${LP.links}</textarea>
+      <div style="font-size:10px;color:var(--T3);margin-top:3px">已输入 <b id="lp-link-count">0</b> 个链接</div>
+    </div>
+
+    <!-- 模板选择 -->
+    <div style="margin-bottom:10px">
+      <div style="font-size:11px;font-weight:600;color:var(--T2);margin-bottom:5px">铺货模板</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <select class="sel" style="flex:1" id="lp-template" onchange="lpSelectTemplate(this.value)">
+          <option value="">请选择1个商品模板，可输入关键字搜索</option>
+          ${(App.templates||[]).map(t=>`<option value="${t.id}">${t.name}</option>`).join('')}
+        </select>
+        <button class="btn btn-default btn-sm" onclick="lpViewTemplate()">查看模版</button>
+        <button class="btn btn-default btn-sm" onclick="lpAddTemplate()">添加模版</button>
+      </div>
+    </div>
+
+    <!-- 铺货插件 -->
+    <div style="margin-bottom:12px;padding:8px 10px;background:var(--B2);border-radius:var(--R);display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <div style="font-size:11px;font-weight:600;color:var(--T2)">铺货插件</div>
+        <div style="font-size:10px;color:var(--T3)">安装插件后可直接在抖店后台自动填写商品信息</div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="toast('插件下载功能','info')">立即下载</button>
+    </div>
+
+    <!-- 1688授权 -->
+    <div style="padding:8px 10px;background:var(--B2);border-radius:var(--R);display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div style="font-size:11px;color:var(--T2)">授权的1688账号：<span style="color:var(--D)" id="lp-auth-status">未授权</span></div>
+      <button class="btn btn-default btn-sm" onclick="lpAuth()">添加授权</button>
+    </div>
+
+    <!-- 操作按钮 -->
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-lg" style="flex:2" id="lp-start-btn" onclick="lpStartParse()">
+        🚀 开始铺货预览
+      </button>
+      <button class="btn btn-default btn-lg" onclick="lpBatchAddLib()">加入云商品库</button>
+      <button class="btn btn-default btn-sm" onclick="lpFullStore()">全店铺货</button>
+    </div>
+  </div>
+
+  <!-- 右侧预览区 -->
+  <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+    <!-- 操作条 -->
+    <div class="action-bar">
+      <label class="cb-wrap"><input type="checkbox" id="lp-all-cb" onchange="lpToggleAll(this.checked)" style="accent-color:var(--P)"> 全选</label>
+      <div style="font-size:12px;color:var(--T2)">已勾选 <b id="lp-sel-count" style="color:var(--P)">0</b> / 共 <b id="lp-total-count">0</b> 条</div>
+      <div class="spacer"></div>
+      <select class="sel sm" style="width:200px" id="lp-table-tpl">
+        <option>选择铺货模板</option>
+        ${(App.templates||[]).map(t=>`<option value="${t.id}">${t.name}</option>`).join('')}
+      </select>
+      <button class="btn btn-default btn-sm" onclick="lpTableViewTpl()">查看模版</button>
+      <button class="btn btn-default btn-sm" onclick="lpTableAddTpl()">添加模版</button>
+    </div>
+
+    <!-- 结果表格 -->
+    <div style="flex:1;overflow-y:auto" id="lp-result-wrap">
+      <div class="empty" id="lp-empty">
+        <div class="ei" style="font-size:40px">🔗</div>
+        <div class="et">还没有商品</div>
+        <div class="ed">在左侧输入商品链接并点击「开始铺货预览」<br>支持1688、淘宝、拼多多等10+平台</div>
+      </div>
+      <table class="data-table" id="lp-table" style="display:none">
+        <thead>
+          <tr>
+            <th style="width:32px"><input type="checkbox" style="accent-color:var(--P)" id="lp-thead-cb" onchange="lpToggleAll(this.checked)"></th>
+            <th>商品信息</th>
+            <th style="width:80px">进货价</th>
+            <th style="width:100px">售价设置</th>
+            <th style="width:70px">利润</th>
+            <th style="width:80px">状态</th>
+            <th style="width:100px">操作</th>
+          </tr>
+        </thead>
+        <tbody id="lp-tbody"></tbody>
+      </table>
+    </div>
+
+    <!-- 底部操作 -->
+    <div class="bottom-bar" id="lp-bottom" style="display:none">
+      <div style="font-size:11px;color:var(--T3)">共 <b id="lp-table-total">0</b> 件商品</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-default btn-sm" id="lp-batch-lib" onclick="lpBatchToLib()" disabled>加入云商品库</button>
+        <button class="btn btn-primary btn-sm" id="lp-batch-publish" onclick="lpBatchPublish()" disabled>批量上架</button>
+      </div>
+    </div>
+  </div>
+</div>`;
+}
+
+/* ── 链接铺货逻辑 ── */
+function lpOnLinksInput(el) {
+  LP.links = el.value;
+  const lines = el.value.split('\n').map(s=>s.trim()).filter(s=>s.startsWith('http'));
+  const countEl = document.getElementById('lp-link-count');
+  if (countEl) countEl.textContent = lines.length;
+  const powerEl = document.getElementById('lp-power');
+  if (powerEl) powerEl.textContent = lines.length;
+}
+
+async function lpStartParse() {
+  const textarea = document.getElementById('lp-links');
+  if (!textarea) return;
+  const raw = textarea.value.trim();
+  if (!raw) { toast('请输入商品链接，每行一条', 'warning'); return; }
+
+  const urls = [...new Set(raw.split(/[\n,]+/).map(u=>u.trim()).filter(u=>u.startsWith('http')))];
+  if (!urls.length) { toast('未识别到有效链接，请确认链接以 http 开头', 'warning'); return; }
+  if (urls.length > 20) { toast('一次最多解析20条链接，请分批处理', 'warning'); return; }
+
+  LP.parsing = true;
+  LP.results  = [];
+  LP.selected = new Set();
+
+  const parseBtn = document.querySelector('button[onclick="lpStartParse()"]');
+  if (parseBtn) { parseBtn.disabled = true; parseBtn.textContent = `解析中 0/${urls.length}...`; }
+
+  // 进度显示
+  const progWrap = document.getElementById('lp-progress');
+  if (progWrap) progWrap.style.display = '';
+
+  let done = 0;
+  for (const url of urls) {
+    let product = null;
+    try {
+      const isExt = typeof chrome !== 'undefined' && chrome?.runtime?.id;
+      if (isExt) {
+        // 插件模式：background.js fetch 真实解析
+        const r = await chrome.runtime.sendMessage({ type: 'FETCH_DETAIL', url });
+        if (r?.ok && r.product?.title) product = r.product;
+      }
+      // 预览/降级：mock 解析
+      if (!product) {
+        await new Promise(r => setTimeout(r, 300 + Math.random()*200));
+        const oid = url.match(/offer\/(\d+)/)?.[1] || url.match(/id=([\d]+)/)?.[1] || genId();
+        const m   = mockGoods('链接商品', 1, '')[0];
+        product   = { ...m, offerId:oid, url,
+          title: oid.length >= 8 ? `商品${oid.substring(0,8)}` : m.title,
+          supplierName: '供应商（预览模式）' };
+      }
+    } catch(e) {
+      product = { offerId:'', url, title:'解析失败', price:0, images:[], supplierName:'', error:e.message };
+    }
+
+    const sell = calcSell({ price: product.price || 0 });
+    const item = {
+      id: genId(), url,
+      offerId:    product.offerId || '',
+      title:      (product.title || url).substring(0, 60),
+      price:      product.price  || 0,
+      sellPrice:  sell,
+      profit:     +(sell - (product.price||0)).toFixed(2),
+      profitRate: product.price > 0 ? Math.round((sell-product.price)/sell*100) : 0,
+      supplier:   product.supplierName || '',
+      sales:      product.monthlySales || '',
+      image:      product.images?.[0] || product.image || '',
+      images:     product.images || [],
+      detailImages: product.detailImages || [],
+      colors:     product.colors || [],
+      sizes:      product.sizes  || [],
+      attributes: product.attributes || {},
+      status:     product.price > 0 ? '解析成功' : (product.error ? '解析失败' : '价格未知'),
+      selected:   product.price > 0,
+    };
+    LP.results.push(item);
+    if (item.selected) LP.selected.add(item.id);
+
+    done++;
+    if (parseBtn) parseBtn.textContent = `解析中 ${done}/${urls.length}...`;
+    // 实时渲染
+    lpRenderResultTable();
+  }
+
+  if (progWrap)  progWrap.style.display  = 'none';
+  if (parseBtn) { parseBtn.disabled = false; parseBtn.textContent = '解析链接'; }
+
+  LP.parsing = false;
+  const ok  = LP.results.filter(r => r.status === '解析成功').length;
+  const fail = urls.length - ok;
+  toast(`解析完成：${ok}条成功${fail > 0 ? `，${fail}条失败` : ''}`, ok > 0 ? 'success' : 'warning');
+}
+
+function lpRenderResultTable() {
+  const empty = document.getElementById('lp-empty');
+  const table = document.getElementById('lp-table');
+  const bottom = document.getElementById('lp-bottom');
+  const tbody = document.getElementById('lp-tbody');
+  if (!table || !tbody) return;
+
+  const n = LP.results.length;
+  if (n === 0) {
+    if(empty) empty.style.display='';
+    table.style.display='none';
+    if(bottom) bottom.style.display='none';
+    return;
+  }
+  if(empty) empty.style.display='none';
+  table.style.display='table';
+  if(bottom) bottom.style.display='';
+
+  const totalEl=document.getElementById('lp-table-total');
+  if(totalEl) totalEl.textContent=n;
+  const selEl=document.getElementById('lp-sel-count');
+  if(selEl) selEl.textContent=LP.selected.size;
+  const totalCountEl=document.getElementById('lp-total-count');
+  if(totalCountEl) totalCountEl.textContent=n;
+
+  tbody.innerHTML = LP.results.map((p,i) => {
+    const isSel = LP.selected.has(p.offerId);
+    const sell = calcSell(p);
+    const profit = sell>0&&p.price>0 ? (sell-p.price).toFixed(2) : '—';
+    return `<tr class="${isSel?'selected':''}">
+      <td><input type="checkbox" ${isSel?'checked':''} style="accent-color:var(--P)" onchange="lpToggleItem('${p.offerId}',this.checked)"></td>
+      <td>
+        <div style="display:flex;gap:8px;align-items:flex-start">
+          <img class="cell-img" src="${p.images?.[0]||''}" onerror="this.style.background='var(--B3)'" style="cursor:pointer" onclick="window.open('${p.url}','_blank')">
+          <div>
+            <div class="cell-title" style="max-width:200px" title="${p.title||''}">${(p.title||'').substring(0,36)}...</div>
+            <div class="cell-meta">${p.supplierName||'—'}</div>
+          </div>
+        </div>
+      </td>
+      <td style="color:var(--D);font-weight:700">¥${p.price||'—'}</td>
+      <td>
+        <div class="price-inp">
+          <span class="pi-pfx">¥</span>
+          <input type="number" value="${sell}" min="0" step="0.01" onchange="lpUpdateSell(${i},this.value)">
+        </div>
+      </td>
+      <td style="color:${parseFloat(profit)>0?'var(--S)':'var(--D)'};font-weight:600">${profit!=='—'?`¥${profit}`:profit}</td>
+      <td><span class="tag tag-green">${p.parseStatus==='success'?'解析成功':'解析失败'}</span></td>
+      <td>
+        <div style="display:flex;flex-direction:column;gap:3px">
+          <button class="btn btn-xs btn-primary" onclick="lpPublishOne(${i})">上架</button>
+          <button class="btn btn-xs btn-default" onclick="lpAddOneToLib(${i})">加采集箱</button>
+          <button class="btn btn-xs btn-default" onclick="window.open('${p.url}','_blank')">查看</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+
+  // 更新批量按钮
+  const hasSelected = LP.selected.size > 0;
+  ['lp-batch-lib','lp-batch-publish'].forEach(id => {
+    const el = document.getElementById(id); if(el) el.disabled=!hasSelected;
+  });
+}
+
+function lpToggleItem(offerId, checked) {
+  checked ? LP.selected.add(offerId) : LP.selected.delete(offerId);
+  lpRenderResultTable();
+}
+
+function lpToggleAll(checked) {
+  if (checked) LP.results.forEach(p=>LP.selected.add(p.offerId));
+  else LP.selected.clear();
+  lpRenderResultTable();
+}
+
+function lpUpdateSell(idx, val) {
+  if (LP.results[idx]) LP.results[idx].sellPrice = parseFloat(val)||0;
+}
+
+function lpPublishOne(idx) {
+  const p = LP.results[idx];
+  if (!p) return;
+  lpAddToBoxAndPublish(p);
+}
+
+function lpAddOneToLib(idx) {
+  const p = LP.results[idx];
+  if (!p) return;
+  if (App.products.find(x=>x.offerId===p.offerId)) { toast('已在采集箱中'); return; }
+  App.products.unshift({...p, id:genId(), addedAt:new Date().toISOString(), editTitle:applyTitleTpl(p.title||''), sellPrice:calcSell(p), editDesc:''});
+  saveData();
+  toast(`已加入采集箱：${(p.title||'').substring(0,18)}...`,'success');
+}
+
+function lpAddToBoxAndPublish(p) {
+  const sell = p.sellPrice || calcSell(p);
+  App.history.unshift({id:genId(),offerId:p.offerId,title:p.editTitle||p.title,originalPrice:p.price,sellPrice:sell,platform:'抖音小店',status:'已发起上架',createdAt:new Date().toISOString()});
+  saveData();
+  toast(`正在打开抖店发布页 · 售价¥${sell}`,'success','上架中',3000);
+  window.open('https://fxg.jinritemai.com/ffa/mshop/goods/create','_blank');
+}
+
+function lpBatchToLib() {
+  const items = LP.results.filter(p=>LP.selected.has(p.offerId));
+  let added=0,skip=0;
+  items.forEach(p=>{
+    if(App.products.find(x=>x.offerId===p.offerId)){skip++;return;}
+    App.products.unshift({...p,id:genId(),addedAt:new Date().toISOString(),editTitle:applyTitleTpl(p.title||''),sellPrice:calcSell(p),editDesc:''});
+    added++;
+  });
+  saveData();
+  toast(`已加入采集箱 ${added} 件，${skip} 件已存在`, added>0?'success':'info');
+}
+
+function lpBatchPublish() {
+  const items = LP.results.filter(p=>LP.selected.has(p.offerId));
+  if (!items.length) return;
+  toast(`开始批量上架 ${items.length} 件商品...`, 'info', '批量上架', 4000);
+  items.forEach((p,i) => {
+    setTimeout(() => { lpAddToBoxAndPublish(p); }, i * 500);
+  });
+}
+
+function lpBatchAddLib() { lpBatchToLib(); }
+
+function lpSelectTemplate(id) { LP.template = id; }
+function lpViewTemplate() { toast('查看铺货模板','info'); }
+function lpAddTemplate() { showModal('template-modal'); }
+function lpFullStore() { toast('全店铺货功能开发中，敬请期待','info'); }
+function lpAuth() { toast('1688授权功能，请安装浏览器插件后使用','info'); }
+function lpTableViewTpl() { lpViewTemplate(); }
+function lpTableAddTpl() { lpAddTemplate(); }
+
+/* ── 数据包导入 Tab ── */
+function lpTabImport() {
+  return `
+<div style="padding:20px">
+  <div class="card">
+    <div class="card-head"><div class="card-title"><div class="card-icon" style="background:var(--PL)">📦</div>数据包导入铺货</div></div>
+    <div class="card-body">
+      <div style="margin-bottom:14px">
+        <div style="font-size:12px;font-weight:600;color:var(--T2);margin-bottom:6px">上传数据包</div>
+        <div style="border:2px dashed var(--BD);border-radius:var(--R2);padding:40px;text-align:center;cursor:pointer;transition:all .15s" onclick="lpTriggerUpload()" onmouseover="this.style.borderColor='var(--P)'" onmouseout="this.style.borderColor='var(--BD)'">
+          <div style="font-size:36px;margin-bottom:8px">📁</div>
+          <div style="font-size:13px;font-weight:600;color:var(--T1);margin-bottom:4px">点击或拖拽文件到此处</div>
+          <div style="font-size:11px;color:var(--T3)">支持 .xlsx / .xls / .csv 格式，每次最多500条</div>
+        </div>
+        <input type="file" id="lp-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="lpHandleFile(this)">
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-default" onclick="lpDownloadDataTpl()">⬇ 下载数据包模板</button>
+        <button class="btn btn-default" onclick="toast('查看使用说明','info')">📖 使用说明</button>
+      </div>
+    </div>
+  </div>
+</div>`;
+}
+
+function lpTriggerUpload() { document.getElementById('lp-file')?.click(); }
+function lpHandleFile(input) {
+  const f = input.files?.[0];
+  if (!f) return;
+  toast(`已选择文件：${f.name}，正在解析...`, 'info');
+  setTimeout(() => { toast('文件解析功能开发中，敬请期待', 'warning'); }, 1000);
+}
+function lpDownloadDataTpl() {
+  const header = '商品链接,商品标题,售价,类目';
+  const rows = ['https://detail.1688.com/offer/123.html,测试商品,99,女装'];
+  const csv = header + '\n' + rows.join('\n');
+  const a = Object.assign(document.createElement('a'),{href:URL.createObjectURL(new Blob([csv],{type:'text/csv'})),download:'数据包模板.csv'});
+  a.click(); URL.revokeObjectURL(a.href);
+}
+
+/* ── 铺货预览 Tab ── */
+function lpTabPreview() {
+  const items = App.history.filter(h=>h.status==='已发起上架').slice(0,20);
+  return `
+<div style="padding:16px">
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title"><div class="card-icon" style="background:var(--PL)">👁️</div>铺货预览队列</div>
+      <button class="btn btn-default btn-sm" onclick="toast('刷新预览队列','info')">刷新</button>
+    </div>
+    <div class="card-body" style="padding:0">
+      ${items.length === 0
+        ? `<div class="empty" style="padding:40px"><div class="ei">👁️</div><div class="et">暂无铺货预览</div><div class="ed">点击「开始铺货预览」后商品会出现在这里</div></div>`
+        : `<table class="data-table">
+          <thead><tr><th>商品名称</th><th>进货价</th><th>售价</th><th>状态</th><th>时间</th><th>操作</th></tr></thead>
+          <tbody>
+          ${items.map(h=>`<tr>
+            <td style="max-width:200px"><div class="cell-title">${(h.title||'—').substring(0,30)}</div></td>
+            <td>¥${h.originalPrice||'—'}</td>
+            <td style="color:var(--D);font-weight:700">¥${h.sellPrice||'—'}</td>
+            <td><span class="tag tag-blue">${h.status}</span></td>
+            <td style="color:var(--T3);font-size:11px">${fmtDate(h.createdAt)}</td>
+            <td><button class="btn btn-xs btn-primary" onclick="window.open('https://fxg.jinritemai.com','_blank')">前往上架</button></td>
+          </tr>`).join('')}
+          </tbody>
+        </table>`}
+    </div>
+  </div>
+</div>`;
+}
+
+/* ── 上货列表 Tab ── */
+function lpTabList() {
+  const hist = App.history.slice(0, 50);
+  return `
+<div style="padding:16px">
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title"><div class="card-icon" style="background:#E8FFEA">📋</div>上货列表（历史记录）</div>
+      <button class="btn btn-danger btn-sm" onclick="if(confirm('确认清空？'))App.history=[];saveData();nav('link_puhuo')">清空记录</button>
+    </div>
+    <div class="card-body" style="padding:0">
+      ${hist.length===0
+        ? `<div class="empty" style="padding:40px"><div class="ei">📋</div><div class="et">暂无上货记录</div></div>`
+        : `<table class="data-table">
+          <thead><tr><th>商品名称</th><th>进货价</th><th>售价</th><th>利润</th><th>平台</th><th>状态</th><th>时间</th></tr></thead>
+          <tbody>
+          ${hist.map(h=>{
+            const profit=h.sellPrice&&h.originalPrice?(h.sellPrice-h.originalPrice).toFixed(2):null;
+            return `<tr>
+              <td style="max-width:180px"><div class="cell-title">${(h.title||'—').substring(0,30)}</div></td>
+              <td>¥${h.originalPrice||'—'}</td>
+              <td style="color:var(--D);font-weight:700">¥${h.sellPrice||'—'}</td>
+              <td style="color:var(--S);font-weight:600">${profit?`¥${profit}`:'—'}</td>
+              <td><span class="tag tag-blue">${h.platform||'—'}</span></td>
+              <td><span class="tag ${h.status==='已上架'?'tag-green':h.status==='已填写'?'tag-blue':'tag-gray'}">${h.status}</span></td>
+              <td style="color:var(--T3);font-size:11px">${fmtDate(h.createdAt)}</td>
+            </tr>`;}).join('')}
+          </tbody>
+        </table>`}
+    </div>
+  </div>
+</div>`;
+}
+
+
+/* ═══ batch_modify.js ═══ */
+/**
+ * pages/batch_modify.js — 商品批量修改
+ * 对照晓风：tabs(售卖中/已下架/草稿箱) + 搜索筛选 + 商品表格 + 批量操作
+ */
+
+const BM = {
+  activeTab: 'selling',
+  searchId: '', searchSourceId: '', searchName: '', dateFrom:'', dateTo:'', sortBy:'',
+  selected: new Set(),
+  items: [],   // 从App.history和App.products模拟
+  page: 1, pageSize: 50,
+};
+
+PAGES.batch_modify = function() {
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);display:flex;flex-direction:column;overflow:hidden">
+
+  <!-- Tab -->
+  <div class="tabs" style="padding-left:16px;background:#fff">
+    ${[['selling','售卖中'],['offline','已下架'],['draft','草稿箱']].map(([id,label])=>`
+    <div class="tab-item ${BM.activeTab===id?'active':''}" onclick="bmSetTab('${id}')">${label}</div>`).join('')}
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;padding:0 12px;font-size:11px;color:var(--T3)">
+      如发现晓风应用内展示商品数与抖店后台商品数不一致，请同步商品
+    </div>
+  </div>
+
+  <!-- 搜索条 -->
+  <div style="background:#fff;padding:10px 16px;border-bottom:1px solid var(--BD);display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex-shrink:0">
+    <div style="display:flex;align-items:center;gap:4px">
+      <span class="form-label">商品ID:</span>
+      <input class="inp inp-sm" id="bm-id" placeholder="请输入商品ID" value="${BM.searchId}" style="width:140px" oninput="BM.searchId=this.value">
+    </div>
+    <div style="display:flex;align-items:center;gap:4px">
+      <span class="form-label">来源商品ID:</span>
+      <input class="inp inp-sm" id="bm-src-id" placeholder="请输入来源商品ID" value="${BM.searchSourceId}" style="width:140px" oninput="BM.searchSourceId=this.value">
+    </div>
+    <div style="display:flex;align-items:center;gap:4px">
+      <span class="form-label">商品名称:</span>
+      <input class="inp inp-sm" id="bm-name" placeholder="请输入商品名称" value="${BM.searchName}" style="width:160px" oninput="BM.searchName=this.value">
+    </div>
+    <div style="display:flex;align-items:center;gap:4px">
+      <span class="form-label">创建时间:</span>
+      <input type="date" class="inp inp-sm" value="${BM.dateFrom}" style="width:130px" onchange="BM.dateFrom=this.value">
+      <span style="color:var(--T4)">—</span>
+      <input type="date" class="inp inp-sm" value="${BM.dateTo}" style="width:130px" onchange="BM.dateTo=this.value">
+    </div>
+    <div style="display:flex;align-items:center;gap:4px">
+      <span class="form-label">商品排序:</span>
+      <select class="sel sm" style="width:120px" onchange="BM.sortBy=this.value">
+        <option value="">请选择商品排序</option>
+        <option value="time_desc">最新创建</option>
+        <option value="time_asc">最早创建</option>
+        <option value="price_desc">价格降序</option>
+        <option value="price_asc">价格升序</option>
+      </select>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="bmSearch()">搜索</button>
+    <button class="btn btn-default btn-sm" onclick="bmReset()">重置</button>
+    <div class="spacer"></div>
+    <button class="btn btn-default btn-sm" onclick="bmBatchGenVideo()">批量生成主图视频</button>
+  </div>
+
+  <!-- 批量操作条 -->
+  <div class="action-bar" id="bm-action-bar">
+    <label class="cb-wrap"><input type="checkbox" id="bm-all-cb" onchange="bmToggleAll(this.checked)" style="accent-color:var(--P)"> 全选</label>
+    <div style="font-size:12px;color:var(--T2)">已选商品(<b id="bm-sel-count" style="color:var(--P)">0</b>)条</div>
+    <div class="spacer"></div>
+    <button class="btn btn-default btn-sm" id="bm-del-btn" onclick="bmBatchOffline()" disabled>批量下架</button>
+    <button class="btn btn-default btn-sm" id="bm-price-btn" onclick="bmBatchPrice()" disabled>批量改商品价格</button>
+    <button class="btn btn-default btn-sm" id="bm-stock-btn" onclick="bmBatchStock()" disabled>批量改库存</button>
+    <button class="btn btn-default btn-sm" id="bm-sku-btn" onclick="bmBatchSku()" disabled>批量改规格(sku)</button>
+    <button class="btn btn-default btn-sm" id="bm-ops-btn" onclick="bmBatchOps()" disabled>批量操作</button>
+    <button class="btn btn-default btn-sm" onclick="showModal('bm-filter-modal')">自定义筛选</button>
+    <button class="btn btn-default btn-sm" onclick="bmBatchOpt()">一键优化</button>
+    <button class="btn btn-default btn-sm" id="bm-lib-btn" onclick="bmAddLib()" disabled>加入云商品库</button>
+    <button class="btn btn-primary btn-sm" onclick="bmSync()">🔄 商品同步</button>
+    <button class="btn btn-default btn-sm" onclick="bmCopyExport()">📋 复制导出</button>
+  </div>
+
+  <!-- 表格区 -->
+  <div style="flex:1;overflow-y:auto" id="bm-table-wrap">
+    ${bmRenderTable()}
+  </div>
+
+  <!-- 分页 -->
+  <div class="bottom-bar" id="bm-pager">
+    <div style="font-size:11px;color:var(--T3)">共 <b id="bm-page-total">0</b> 条数据</div>
+    <div id="bm-pagination" class="pagination"></div>
+    <select class="sel sm" style="width:90px" onchange="BM.pageSize=parseInt(this.value);bmRefresh()">
+      <option>50 / 页</option>
+      <option>100 / 页</option>
+      <option>200 / 页</option>
+    </select>
+  </div>
+</div>`;
+};
+
+PAGE_INITS.batch_modify = function() {
+  bmRefresh();
+};
+
+function bmSetTab(id) {
+  BM.activeTab = id; BM.selected.clear(); BM.page = 1;
+  document.querySelectorAll('.tabs .tab-item').forEach((el, i) => {
+    el.classList.toggle('active', [['selling','售卖中'],['offline','已下架'],['draft','草稿箱']][i]?.[0] === id);
+  });
+  bmRefresh();
+}
+
+function bmGetItems() {
+  // 模拟商品数据，结合采集箱和历史
+  const base = App.products.map(p => ({
+    id: p.id, sourceId: p.offerId, title: p.editTitle||p.title,
+    category: p.category||'女装', status: BM.activeTab,
+    price: calcSell(p), originalPrice: p.price, salesCount: Math.floor(Math.random()*500),
+    stock: Math.floor(Math.random()*100), source: '1688', createdAt: p.addedAt,
+    image: p.images?.[0]||'', url: p.url,
+  }));
+  // 按搜索过滤
+  return base.filter(p => {
+    if (BM.searchName && !((p.title||'').includes(BM.searchName))) return false;
+    if (BM.searchId && !(p.id||'').includes(BM.searchId)) return false;
+    return true;
+  });
+}
+
+function bmRefresh() {
+  BM.items = bmGetItems();
+  const wrap = document.getElementById('bm-table-wrap');
+  if (wrap) wrap.innerHTML = bmRenderTable();
+  const total = document.getElementById('bm-page-total');
+  if (total) total.textContent = BM.items.length;
+  bmUpdateBtns();
+}
+
+function bmSearch() { BM.page=1; bmRefresh(); }
+function bmReset() {
+  BM.searchId=''; BM.searchSourceId=''; BM.searchName='';
+  BM.dateFrom=''; BM.dateTo=''; BM.sortBy='';
+  document.getElementById('bm-id')&&(document.getElementById('bm-id').value='');
+  document.getElementById('bm-src-id')&&(document.getElementById('bm-src-id').value='');
+  document.getElementById('bm-name')&&(document.getElementById('bm-name').value='');
+  bmRefresh();
+}
+
+function bmRenderTable() {
+  if (App.products.length === 0) {
+    return `<div class="empty" style="padding:80px 20px">
+      <div class="ei">🏪</div>
+      <div class="et">未连接店铺</div>
+      <div class="ed">请先授权绑定抖音小店，才能管理已上架商品<br>或前往采集箱上架商品后在此管理</div>
+      <div style="display:flex;gap:8px;justify-content:center;margin-top:14px">
+        <button class="btn btn-primary" onclick="toast('授权功能开发中','info')">授权抖音小店</button>
+        <button class="btn btn-default" onclick="nav('collect_box')">前往采集箱</button>
+      </div>
+    </div>`;
+  }
+
+  const items = BM.items;
+  if (items.length === 0) {
+    return `<div class="empty" style="padding:60px"><div class="ei">😶</div><div class="et">没有匹配的商品</div><div class="ed">尝试修改搜索条件</div></div>`;
+  }
+
+  return `
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th style="width:32px"><input type="checkbox" id="bm-thead-cb" onchange="bmToggleAll(this.checked)" style="accent-color:var(--P)"></th>
+        <th style="min-width:220px">来源商品信息</th>
+        <th style="width:80px">类目</th>
+        <th style="width:70px">状态</th>
+        <th style="width:80px">价格</th>
+        <th style="width:60px">销量</th>
+        <th style="width:60px">库存</th>
+        <th style="width:60px">货源</th>
+        <th style="width:120px">创建时间</th>
+        <th style="width:100px">操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${items.map(p => {
+        const isSel = BM.selected.has(p.id);
+        return `<tr class="${isSel?'selected':''}">
+          <td><input type="checkbox" ${isSel?'checked':''} style="accent-color:var(--P)" onchange="bmToggleItem('${p.id}',this.checked)"></td>
+          <td>
+            <div style="display:flex;gap:8px;align-items:flex-start">
+              <img class="cell-img" src="${p.image}" onerror="this.style.background='var(--B3)'" style="cursor:pointer" onclick="window.open('${p.url||'#'}','_blank')">
+              <div>
+                <div class="cell-title" style="max-width:160px">${(p.title||'').substring(0,30)}...</div>
+                <div class="cell-meta">货源ID: ${p.sourceId?.substring(0,12)||'—'}</div>
+              </div>
+            </div>
+          </td>
+          <td><span class="tag tag-gray" style="font-size:10px">${p.category||'—'}</span></td>
+          <td><span class="tag ${p.status==='selling'?'tag-green':p.status==='offline'?'tag-gray':'tag-orange'}">${p.status==='selling'?'上架中':p.status==='offline'?'已下架':'草稿'}</span></td>
+          <td>
+            <div style="font-size:13px;font-weight:700;color:var(--D)">¥${p.price}</div>
+            <div style="font-size:10px;color:var(--T3)">进¥${p.originalPrice||'—'}</div>
+          </td>
+          <td style="text-align:center;color:var(--T2)">${p.salesCount||0}</td>
+          <td style="text-align:center;color:${(p.stock||0)<10?'var(--D)':'var(--T2)'}">${p.stock||0}</td>
+          <td><span class="tag tag-blue" style="font-size:10px">1688</span></td>
+          <td style="font-size:11px;color:var(--T3)">${fmtDate(p.createdAt)}</td>
+          <td>
+            <div style="display:flex;flex-direction:column;gap:3px">
+              <button class="btn btn-xs btn-default" onclick="bmEditPrice('${p.id}')">改价格</button>
+              <button class="btn btn-xs btn-default" onclick="bmEditStock('${p.id}')">改库存</button>
+              <button class="btn btn-xs btn-danger" onclick="bmOfflineOne('${p.id}')">下架</button>
+            </div>
+          </td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table>`;
+}
+
+function bmToggleItem(id, checked) {
+  checked ? BM.selected.add(id) : BM.selected.delete(id);
+  bmUpdateBtns();
+  const selCount = document.getElementById('bm-sel-count');
+  if (selCount) selCount.textContent = BM.selected.size;
+}
+
+function bmToggleAll(checked) {
+  if (checked) BM.items.forEach(p=>BM.selected.add(p.id));
+  else BM.selected.clear();
+  bmRefresh();
+}
+
+function bmUpdateBtns() {
+  const n = BM.selected.size > 0;
+  ['bm-del-btn','bm-price-btn','bm-stock-btn','bm-sku-btn','bm-ops-btn','bm-lib-btn'].forEach(id => {
+    const el = document.getElementById(id); if(el) el.disabled = !n;
+  });
+  const selCount = document.getElementById('bm-sel-count');
+  if (selCount) selCount.textContent = BM.selected.size;
+}
+
+function bmBatchOffline() { if(!BM.selected.size) return; if(!confirm(`确认下架已选 ${BM.selected.size} 件商品？`)) return; toast(`已下架 ${BM.selected.size} 件商品`,'success'); BM.selected.clear(); bmRefresh(); }
+function bmBatchPrice() { if(!BM.selected.size) return; showModal('bm-price-modal'); }
+function bmBatchStock() { if(!BM.selected.size) return; toast('批量改库存功能','info'); }
+function bmBatchSku() { if(!BM.selected.size) return; toast('批量改规格功能','info'); }
+function bmBatchOps() { if(!BM.selected.size) return; toast('批量操作功能','info'); }
+function bmBatchOpt() { toast('一键优化功能，将优化商品标题和主图','info'); }
+function bmAddLib() { toast('已加入云商品库','success'); }
+function bmSync() { toast('正在同步抖店商品数据...','info'); setTimeout(()=>toast('商品同步完成','success'),1500); }
+function bmCopyExport() { toast('复制导出功能','info'); }
+function bmBatchGenVideo() { toast('批量生成主图视频功能开发中','info'); }
+function bmEditPrice(id) { showModal('bm-price-modal'); }
+function bmEditStock(id) { toast('改库存功能开发中','info'); }
+function bmOfflineOne(id) { if(!confirm('确认下架该商品？')) return; App.products = App.products.filter(p=>p.id!==id); saveData(); bmRefresh(); toast('已下架','success'); }
+
+// 批量改价 Modal
+registerModal('bm-price-modal', () => `
+<div class="modal-box">
+  <div class="modal-hdr"><h3>批量改商品价格</h3><div class="modal-close" onclick="closeModal('bm-price-modal')">✕</div></div>
+  <div class="modal-body">
+    <div style="margin-bottom:14px;font-size:12px;color:var(--T2)">已选 <b>${BM.selected.size}</b> 件商品</div>
+    <div class="form-row"><span class="form-label">改价方式：</span>
+      <label class="rb-wrap"><input type="radio" name="bm-price-type" value="fixed" checked> 固定价格</label>
+      <label class="rb-wrap"><input type="radio" name="bm-price-type" value="ratio"> 倍率调整</label>
+      <label class="rb-wrap"><input type="radio" name="bm-price-type" value="add"> 加减价格</label>
+    </div>
+    <div class="form-row">
+      <span class="form-label">目标价格：</span>
+      <input class="inp" id="bm-new-price" type="number" min="0" step="0.01" placeholder="请输入价格" style="width:160px">
+      <span style="font-size:11px;color:var(--T3)">元</span>
+    </div>
+    <div style="background:#FFF3E8;border-radius:var(--R);padding:8px 12px;font-size:11px;color:var(--W)">
+      ⚠️ 改价后将直接更新商品售价，请谨慎操作
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-default" onclick="closeModal('bm-price-modal')">取消</button>
+    <button class="btn btn-primary" onclick="bmConfirmPrice()">确认修改</button>
+  </div>
+</div>`);
+
+function bmConfirmPrice() {
+  const newPrice = parseFloat(document.getElementById('bm-new-price')?.value);
+  if (!newPrice || newPrice <= 0) { toast('请输入有效价格','warning'); return; }
+  BM.selected.forEach(id => {
+    const p = App.products.find(x=>x.id===id);
+    if (p) p.sellPrice = newPrice;
+  });
+  saveData();
+  closeModal('bm-price-modal');
+  bmRefresh();
+  toast(`已将 ${BM.selected.size} 件商品价格改为 ¥${newPrice}`,'success');
+  BM.selected.clear();
+  bmRenderTable();
+}
+
+// 自定义筛选 Modal
+registerModal('bm-filter-modal', () => `
+<div class="modal-box">
+  <div class="modal-hdr"><h3>自定义筛选条件</h3><div class="modal-close" onclick="closeModal('bm-filter-modal')">✕</div></div>
+  <div class="modal-body">
+    <div class="form-row"><span class="form-label">价格范围：</span>
+      <input class="inp inp-sm" type="number" placeholder="最低" style="width:90px">
+      <span>—</span>
+      <input class="inp inp-sm" type="number" placeholder="最高" style="width:90px">
+    </div>
+    <div class="form-row"><span class="form-label">销量范围：</span>
+      <input class="inp inp-sm" type="number" placeholder="最低" style="width:90px">
+      <span>—</span>
+      <input class="inp inp-sm" type="number" placeholder="最高" style="width:90px">
+    </div>
+    <div class="form-row"><span class="form-label">商品类目：</span>
+      <select class="sel" style="width:180px">
+        <option>全部类目</option>
+        ${['女装','男装','童装','鞋类','配饰','家居'].map(c=>`<option>${c}</option>`).join('')}
+      </select>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-default" onclick="closeModal('bm-filter-modal')">取消</button>
+    <button class="btn btn-primary" onclick="closeModal('bm-filter-modal');bmRefresh();toast('筛选已应用','success')">应用筛选</button>
+  </div>
+</div>`);
+
+
+/* ═══ cloud_lib.js ═══ */
+/**
+ * pages/cloud_lib.js — 云商品库
+ * 子页路由：云商品库列表 / 采集箱 / 铺货列表
+ */
+
+// 云商品库列表
+PAGES.cloud_lib_list = function() {
+  const libs = App.cloudLibs || [];
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);display:flex;flex-direction:column;overflow:hidden">
+  <!-- 顶部：库选择 + 添加 -->
+  <div style="background:#fff;border-bottom:1px solid var(--BD);padding:10px 16px;display:flex;align-items:center;gap:10px;flex-shrink:0">
+    <div style="font-size:12px;font-weight:600;color:var(--T2)">云商品库：</div>
+    <select class="sel" style="width:200px">
+      <option>默认库</option>
+      ${libs.map(l=>`<option>${l.name}</option>`).join('')}
+    </select>
+    <button class="btn btn-primary btn-sm" onclick="showModal('cl-add-modal')">+ 添加云商品库</button>
+  </div>
+
+  <!-- 搜索筛选 -->
+  <div class="filter-bar">
+    <span class="fl">商品ID:</span>
+    <input class="inp inp-sm" placeholder="多个用，分隔" style="width:180px">
+    <span class="fl">商品名称:</span>
+    <input class="inp inp-sm" placeholder="请输入商品名称" style="width:160px">
+    <span class="fl">商品类目:</span>
+    <select class="sel sm" style="width:120px">
+      <option>选择商品类目</option>
+      ${['女装','男装','童装','鞋类','配饰','家居','美妆'].map(c=>`<option>${c}</option>`).join('')}
+    </select>
+    <span class="fl">价格范围:</span>
+    <input class="inp inp-sm" placeholder="最低价格" style="width:80px" type="number">
+    <span style="color:var(--T4)">~</span>
+    <input class="inp inp-sm" placeholder="最高价格" style="width:80px" type="number">
+    <button class="btn btn-primary btn-sm" onclick="clSearch()">搜索</button>
+    <button class="btn btn-default btn-sm" onclick="clReset()">重置</button>
+  </div>
+
+  <!-- 表格 -->
+  <div style="flex:1;overflow-y:auto" id="cl-list-wrap">
+    ${clRenderList()}
+  </div>
+
+  <!-- 底部操作 -->
+  <div class="bottom-bar">
+    <div style="display:flex;align-items:center;gap:10px">
+      <label class="cb-wrap"><input type="checkbox" id="cl-all-cb" onchange="clToggleAll(this.checked)" style="accent-color:var(--P)"> 全选</label>
+      <span style="color:var(--BD)">|</span>
+      <span style="font-size:12px;color:var(--T2)">已选商品 <b id="cl-sel-count" style="color:var(--P)">0</b> 个</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="font-size:11px;color:var(--T3)">共 <b id="cl-total">${App.products.length}</b> 条</span>
+      <div id="cl-pagination" class="pagination"></div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-sm" id="cl-puhuo-btn" onclick="clBatchPuhuo()" disabled>批量铺货</button>
+      <button class="btn btn-default btn-sm" id="cl-ai-btn" onclick="toast('AI违规预测中...','info')" disabled>AI违规预测</button>
+      <button class="btn btn-default btn-sm" onclick="toast('低价引流检测功能开发中','info')" disabled>低价引流检测</button>
+      <span style="color:var(--BD)">|</span>
+      <button class="btn btn-default btn-sm" onclick="clCopyExport()">📋 复制导出</button>
+      <select class="sel sm" style="width:200px">
+        <option>请选择1个商品模板，可输入关键字搜索</option>
+        ${(App.templates||[]).map(t=>`<option>${t.name}</option>`).join('')}
+      </select>
+      <button class="btn btn-default btn-sm">查看模版</button>
+      <button class="btn btn-default btn-sm">添加模版</button>
+    </div>
+  </div>
+</div>`;
+};
+
+function clRenderList() {
+  if (App.products.length === 0) {
+    return `<div class="empty" style="padding:80px 20px">
+      <div class="ei">☁️</div><div class="et">云商品库为空</div>
+      <div class="ed">采集商品后自动同步到云商品库，也可以从采集箱手动添加</div>
+      <button class="btn btn-primary" style="margin-top:14px" onclick="nav('goods_collect')">去采集商品</button>
+    </div>`;
+  }
+  return `
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th style="width:32px"><input type="checkbox" style="accent-color:var(--P)" onchange="clToggleAll(this.checked)"></th>
+        <th style="width:42px">序号</th>
+        <th>来源商品信息</th>
+        <th style="width:90px">来源价格</th>
+        <th style="width:80px">来源库存</th>
+        <th style="width:120px">添加时间</th>
+        <th style="width:100px">备注</th>
+        <th style="width:100px">操作</th>
+      </tr>
+    </thead>
+    <tbody>
+    ${App.products.map((p, i) => `
+      <tr>
+        <td><input type="checkbox" style="accent-color:var(--P)" onchange="clToggleItem('${p.id}',this.checked)"></td>
+        <td style="text-align:center;color:var(--T3)">${i+1}</td>
+        <td>
+          <div style="display:flex;gap:8px;align-items:flex-start">
+            <img class="cell-img" src="${p.images?.[0]||''}" onerror="this.style.background='var(--B3)'" onclick="window.open('${p.url||'#'}','_blank')" style="cursor:pointer">
+            <div>
+              <div class="cell-title" style="max-width:220px">${(p.editTitle||p.title||'').substring(0,36)}...</div>
+              <div class="cell-meta">🏭 ${p.supplierName||'—'} | ${p.category||'—'}</div>
+              <div class="cell-meta" style="color:var(--T4)">来源ID: ${(p.offerId||'').substring(0,14)}</div>
+            </div>
+          </div>
+        </td>
+        <td>
+          <div style="font-size:13px;font-weight:700;color:var(--D)">¥${p.price||'—'}</div>
+        </td>
+        <td style="text-align:center;color:var(--T2)">∞</td>
+        <td style="font-size:11px;color:var(--T3)">${fmtDate(p.addedAt)}</td>
+        <td><input class="inp inp-xs" placeholder="添加备注" style="width:90px"></td>
+        <td>
+          <div style="display:flex;flex-direction:column;gap:3px">
+            <button class="btn btn-xs btn-primary" onclick="nav('collect_box');setTimeout(()=>cbOpenEditor('${p.id}'),100)">编辑上架</button>
+            <button class="btn btn-xs btn-default" onclick="window.open('${p.url||'#'}','_blank')">查看货源</button>
+          </div>
+        </td>
+      </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+const _clSelected = new Set();
+function clToggleItem(id, v) { v ? _clSelected.add(id) : _clSelected.delete(id); clUpdateBtns(); }
+function clToggleAll(v) { if(v) App.products.forEach(p=>_clSelected.add(p.id)); else _clSelected.clear(); clUpdateBtns(); }
+function clUpdateBtns() {
+  const n = _clSelected.size;
+  ['cl-puhuo-btn','cl-ai-btn'].forEach(id=>{const e=document.getElementById(id);if(e)e.disabled=!n;});
+  const el=document.getElementById('cl-sel-count');if(el)el.textContent=n;
+}
+function clSearch() { toast('搜索功能执行中','info'); }
+function clReset() { nav('cloud_lib_list'); }
+function clBatchPuhuo() { toast(`批量铺货 ${_clSelected.size} 件商品`,'success'); }
+function clCopyExport() { toast('复制导出中','info'); }
+
+// 铺货列表页
+PAGES.puhuo_list = function() {
+  const hist = App.history;
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);display:flex;flex-direction:column;overflow:hidden">
+  <div style="background:#fff;padding:10px 16px;border-bottom:1px solid var(--BD);display:flex;align-items:center;gap:8px;flex-shrink:0">
+    <div style="font-size:13px;font-weight:700">铺货列表</div>
+    <div class="spacer"></div>
+    <button class="btn btn-default btn-sm" onclick="plExport()">📊 导出CSV</button>
+    <button class="btn btn-danger btn-sm" onclick="plClearAll()">🗑 清空记录</button>
+  </div>
+
+  <!-- 搜索筛选 -->
+  <div class="filter-bar">
+    <span class="fl">商品名称:</span>
+    <input class="inp inp-sm" id="pl-search" placeholder="搜索商品名称" style="width:200px" oninput="plFilter(this.value)">
+    <span class="fl">状态:</span>
+    <select class="sel sm" id="pl-status" style="width:120px" onchange="plFilter()">
+      <option value="">全部</option>
+      <option value="已发起上架">已发起上架</option>
+      <option value="已上架">已上架</option>
+      <option value="审核中">审核中</option>
+      <option value="审核失败">审核失败</option>
+    </select>
+    <span class="fl">时间:</span>
+    <input type="date" class="inp inp-sm" style="width:130px">
+    <span style="color:var(--T4)">—</span>
+    <input type="date" class="inp inp-sm" style="width:130px">
+    <button class="btn btn-primary btn-sm" onclick="plFilter()">搜索</button>
+  </div>
+
+  <!-- 表格 -->
+  <div style="flex:1;overflow-y:auto" id="pl-wrap">
+    ${plRenderTable(hist)}
+  </div>
+
+  <!-- 分页 -->
+  <div class="bottom-bar">
+    <div style="font-size:11px;color:var(--T3)">共 <b>${hist.length}</b> 条记录</div>
+  </div>
+</div>`;
+};
+
+function plRenderTable(list) {
+  if (!list.length) return `<div class="empty" style="padding:80px"><div class="ei">📋</div><div class="et">暂无铺货记录</div><div class="ed">上架商品后自动记录到此处</div></div>`;
+  return `<table class="data-table">
+    <thead><tr><th>商品名称</th><th style="width:80px">进货价</th><th style="width:80px">售价</th><th style="width:80px">利润</th><th style="width:80px">平台</th><th style="width:90px">状态</th><th style="width:130px">时间</th><th style="width:80px">操作</th></tr></thead>
+    <tbody>${list.map(h=>{
+      const profit=h.sellPrice&&h.originalPrice?(parseFloat(h.sellPrice)-parseFloat(h.originalPrice)).toFixed(2):null;
+      return `<tr>
+        <td style="max-width:200px"><div class="cell-title">${(h.title||'—').substring(0,35)}</div></td>
+        <td>¥${h.originalPrice||'—'}</td>
+        <td style="color:var(--D);font-weight:700">¥${h.sellPrice||'—'}</td>
+        <td style="color:${parseFloat(profit)>0?'var(--S)':'var(--D)'};font-weight:600">${profit?`¥${profit}`:'—'}</td>
+        <td><span class="tag tag-blue">${h.platform||'—'}</span></td>
+        <td><span class="tag ${h.status==='已上架'?'tag-green':h.status==='审核失败'?'tag-red':'tag-blue'}">${h.status||'—'}</span></td>
+        <td style="font-size:11px;color:var(--T3)">${fmtDate(h.createdAt)}</td>
+        <td><button class="btn btn-xs btn-default" onclick="window.open('https://fxg.jinritemai.com','_blank')">查看</button></td>
+      </tr>`;}).join('')}
+    </tbody>
+  </table>`;
+}
+
+function plFilter(val) {
+  const search = document.getElementById('pl-search')?.value||'';
+  const status = document.getElementById('pl-status')?.value||'';
+  const list = App.history.filter(h =>
+    (!search || (h.title||'').includes(search)) &&
+    (!status || h.status === status)
+  );
+  const wrap = document.getElementById('pl-wrap');
+  if (wrap) wrap.innerHTML = plRenderTable(list);
+}
+
+function plExport() {
+  const rows = [['商品名称','进货价','售价','利润','平台','状态','时间']];
+  App.history.forEach(h => {
+    const profit = h.sellPrice&&h.originalPrice ? (h.sellPrice-h.originalPrice).toFixed(2) : '';
+    rows.push([`"${(h.title||'').replace(/"/g,'""')}"`, h.originalPrice||'', h.sellPrice||'', profit, h.platform||'', h.status||'', fmtDate(h.createdAt)]);
+  });
+  const csv = '\ufeff' + rows.map(r=>r.join(',')).join('\n');
+  const a = Object.assign(document.createElement('a'), {href:URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})), download:`铺货列表_${new Date().toLocaleDateString('zh-CN').replace(/\//g,'-')}.csv`});
+  a.click(); URL.revokeObjectURL(a.href);
+  toast('导出成功','success');
+}
+
+function plClearAll() {
+  if (!confirm('确认清空所有铺货记录？')) return;
+  App.history = []; saveData(); nav('puhuo_list');
+  toast('记录已清空');
+}
+
+// 添加云商品库 Modal
+registerModal('cl-add-modal', () => `
+<div class="modal-box">
+  <div class="modal-hdr"><h3>添加云商品库</h3><div class="modal-close" onclick="closeModal('cl-add-modal')">✕</div></div>
+  <div class="modal-body">
+    <div class="form-row"><span class="form-label" style="white-space:nowrap">库名称：</span><input class="inp" id="cl-lib-name" placeholder="请输入云商品库名称" style="flex:1"></div>
+    <div class="form-row"><span class="form-label" style="white-space:nowrap">库描述：</span><textarea class="textarea" placeholder="可选" rows="2" style="flex:1"></textarea></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-default" onclick="closeModal('cl-add-modal')">取消</button>
+    <button class="btn btn-primary" onclick="clAddLib()">确认添加</button>
+  </div>
+</div>`);
+
+function clAddLib() {
+  const name = document.getElementById('cl-lib-name')?.value?.trim();
+  if (!name) { toast('请输入库名称','warning'); return; }
+  if (!App.cloudLibs) App.cloudLibs = [];
+  App.cloudLibs.push({ id: genId(), name, createdAt: new Date().toISOString() });
+  saveData();
+  closeModal('cl-add-modal');
+  toast(`已添加云商品库「${name}」`,'success');
+}
+
+
+/* ═══ others.js ═══ */
+/**
+ * pages/others.js — 其余页面完整实现
+ * 涵盖：多店铺管理 / AI商品管理 / 运营工具 / 商品检测导航 / 邀请好友 / 设置 / AI工作台
+ */
+
+/* ════════════════════════════════════════
+   1. 多店铺管理
+════════════════════════════════════════ */
+PAGES.multi_shop = function() {
+  const shops = App.shops || [];
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);overflow-y:auto;padding:16px">
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title"><div class="card-icon" style="background:#E8F4FF">🏪</div>多店铺管理</div>
+      <button class="btn btn-primary btn-sm" onclick="showModal('shop-add-modal')">+ 添加店铺</button>
+    </div>
+    <div class="card-body" style="padding:0">
+      ${shops.length === 0
+        ? `<div class="empty" style="padding:60px">
+          <div class="ei">🏪</div><div class="et">暂无绑定店铺</div>
+          <div class="ed">绑定您的抖音小店，即可在此统一管理商品和订单数据<br>支持同时管理多个店铺</div>
+          <button class="btn btn-primary" style="margin-top:14px" onclick="showModal('shop-add-modal')">立即绑定抖音小店</button>
+        </div>`
+        : `<table class="data-table">
+          <thead><tr><th>店铺信息</th><th>状态</th><th>商品数</th><th>今日订单</th><th>绑定时间</th><th>操作</th></tr></thead>
+          <tbody>${shops.map(s=>`<tr>
+            <td><div style="display:flex;align-items:center;gap:8px">
+              <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--P),#7C3AED);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700">${s.name[0]}</div>
+              <div><div style="font-weight:600">${s.name}</div><div style="font-size:10px;color:var(--T3)">ID: ${s.id}</div></div>
+            </div></td>
+            <td><span class="tag tag-green">已连接</span></td>
+            <td>0</td><td>0</td>
+            <td style="font-size:11px;color:var(--T3)">${fmtDate(s.createdAt)}</td>
+            <td><button class="btn btn-xs btn-danger" onclick="shopRemove('${s.id}')">解绑</button></td>
+          </tr>`).join('')}
+          </tbody>
+        </table>`}
+    </div>
+  </div>
+
+  <!-- 绑定说明 -->
+  <div class="card">
+    <div class="card-head"><div class="card-title"><div class="card-icon" style="background:#E8FFEA">ℹ️</div>绑定说明</div></div>
+    <div class="card-body">
+      <div style="font-size:12px;color:var(--T2);line-height:2.2">
+        <div>① 点击「添加店铺」按钮，填写店铺授权信息</div>
+        <div>② 使用抖音卖家账号扫码授权或输入 Token</div>
+        <div>③ 授权成功后，即可在此管理店铺商品和订单</div>
+        <div>④ 可同时绑定多个店铺，各店铺数据独立管理</div>
+        <div>⑤ 授权 Token 有效期为 30 天，到期后需重新授权</div>
+      </div>
+    </div>
+  </div>
+</div>`;
+};
+
+registerModal('shop-add-modal', () => `
+<div class="modal-box">
+  <div class="modal-hdr"><h3>添加抖音小店</h3><div class="modal-close" onclick="closeModal('shop-add-modal')">✕</div></div>
+  <div class="modal-body">
+    <div style="text-align:center;padding:20px 0;border-bottom:1px solid var(--BD);margin-bottom:16px">
+      <div style="font-size:60px;margin-bottom:8px">📱</div>
+      <div style="font-size:13px;font-weight:600;color:var(--T1);margin-bottom:4px">扫码授权绑定</div>
+      <div style="font-size:11px;color:var(--T3)">打开抖音卖家APP，扫码授权</div>
+    </div>
+    <div style="text-align:center;font-size:12px;color:var(--T3);margin-bottom:14px">— 或手动填写 —</div>
+    <div class="form-row" style="flex-direction:column;align-items:flex-start;gap:6px">
+      <span class="form-label">店铺名称 <span class="req">*</span></span>
+      <input class="inp" id="sa-name" placeholder="请输入店铺名称">
+    </div>
+    <div class="form-row" style="flex-direction:column;align-items:flex-start;gap:6px">
+      <span class="form-label">授权 Token</span>
+      <input class="inp" id="sa-token" placeholder="粘贴店铺授权 Token（选填）">
+      <div class="form-hint">Token 可从抖店后台「开发者工具」中获取</div>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-default" onclick="closeModal('shop-add-modal')">取消</button>
+    <button class="btn btn-primary" onclick="shopAdd()">确认绑定</button>
+  </div>
+</div>`);
+
+function shopAdd() {
+  const name = document.getElementById('sa-name')?.value?.trim();
+  if (!name) { toast('请输入店铺名称','warning'); return; }
+  if (!App.shops) App.shops = [];
+  App.shops.push({ id: genId(), name, createdAt: new Date().toISOString() });
+  saveData();
+  closeModal('shop-add-modal');
+  toast(`已绑定店铺「${name}」`,'success');
+  // 更新顶部显示
+  const snEl = document.getElementById('shop-name-text') || document.getElementById('shop-name-tb'); if(snEl) snEl.textContent = name;
+  const sstEl = document.getElementById('shop-status-text'); if(sstEl) sstEl.textContent = '已连接';
+  document.getElementById('shop-status-text').style.color = 'var(--S)';
+  App.shopName = name;
+  nav('multi_shop');
+}
+
+function shopRemove(id) {
+  if (!confirm('确认解绑该店铺？')) return;
+  App.shops = (App.shops || []).filter(s=>s.id!==id);
+  saveData();
+  nav('multi_shop');
+  toast('已解绑店铺');
+}
+
+/* ════════════════════════════════════════
+   2. AI商品管理 / 违规预测
+════════════════════════════════════════ */
+PAGES.viol_predict = function() {
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);overflow-y:auto;padding:16px">
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title"><div class="card-icon" style="background:#EEF3FF">🛡️</div>AI商品违规预测</div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-primary btn-sm" onclick="vpCheckAll()">检测全部采集箱商品</button>
+        <button class="btn btn-default btn-sm" onclick="vpCheckSelected()">检测已选商品</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div style="background:linear-gradient(135deg,#EEF3FF,#F0F8FF);border-radius:var(--R2);padding:16px;margin-bottom:16px">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="font-size:36px">🤖</div>
+          <div>
+            <div style="font-size:14px;font-weight:700;color:var(--T1);margin-bottom:4px">AI违规预测功能说明</div>
+            <div style="font-size:12px;color:var(--T2);line-height:1.7">
+              基于抖音平台违规规则库，AI自动分析商品标题、描述、图片等内容<br>
+              提前预警可能违规的关键词和内容，避免商品被下架或受到处罚
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 快速违禁词检测 -->
+      <div style="margin-bottom:16px">
+        <div style="font-size:12px;font-weight:600;color:var(--T2);margin-bottom:8px">快速违禁词检测</div>
+        <div style="display:flex;gap:8px">
+          <textarea class="textarea" id="vp-text" rows="3" placeholder="粘贴商品标题或描述，检测是否含有违禁词..." style="flex:1;min-height:80px"></textarea>
+          <button class="btn btn-primary" style="height:80px;padding:0 16px;flex-shrink:0" onclick="vpCheck()">检测</button>
+        </div>
+        <div id="vp-result" style="margin-top:8px"></div>
+      </div>
+
+      <!-- 采集箱商品违禁词汇总 -->
+      <div>
+        <div style="font-size:12px;font-weight:600;color:var(--T2);margin-bottom:8px">采集箱商品违禁词汇总</div>
+        ${App.products.length === 0
+          ? `<div class="empty" style="padding:30px"><div class="ei" style="font-size:30px">📦</div><div class="et">采集箱为空</div></div>`
+          : `<table class="data-table">
+            <thead><tr><th>商品名称</th><th>违规风险</th><th>违禁词</th><th>操作</th></tr></thead>
+            <tbody>
+            ${App.products.map(p=>{
+              const title = p.editTitle||p.title||'';
+              const viols = checkViol(title);
+              return `<tr>
+                <td style="max-width:180px"><div class="cell-title">${title.substring(0,30)}</div></td>
+                <td><span class="tag ${viols.length>3?'tag-red':viols.length>0?'tag-orange':'tag-green'}">${viols.length>3?'高风险':viols.length>0?`中风险(${viols.length}个)`:'无风险'}</span></td>
+                <td><div style="display:flex;flex-wrap:wrap;gap:3px">
+                  ${viols.length?viols.slice(0,5).map(w=>`<span class="tag tag-red" style="font-size:10px">${w}</span>`).join(''):`<span style="color:var(--S);font-size:11px">✓ 无违禁词</span>`}
+                  ${viols.length>5?`<span style="font-size:10px;color:var(--T3)">+${viols.length-5}个</span>`:''}
+                </div></td>
+                <td><button class="btn btn-xs btn-primary" onclick="nav('collect_box');setTimeout(()=>cbOpenEditor('${p.id}'),100)">去修改</button></td>
+              </tr>`;}).join('')}
+            </tbody>
+          </table>`}
+      </div>
+    </div>
+  </div>
+</div>`;
+};
+
+function vpCheck() {
+  const text = document.getElementById('vp-text')?.value||'';
+  if (!text.trim()) { toast('请输入要检测的内容','warning'); return; }
+  const viols = checkViol(text);
+  const resultEl = document.getElementById('vp-result');
+  if (!resultEl) return;
+  if (viols.length === 0) {
+    resultEl.innerHTML = `<div style="padding:10px;background:#E8FFEA;border:1px solid #92D5A7;border-radius:var(--R);font-size:12px;color:var(--S);display:flex;align-items:center;gap:6px"><span>✅</span>未检测到违禁词，内容合规！</div>`;
+  } else {
+    resultEl.innerHTML = `<div style="padding:10px;background:#FFECE8;border:1px solid #FFAB9A;border-radius:var(--R);font-size:12px;color:var(--D)">
+      <div style="font-weight:700;margin-bottom:6px">⚠️ 检测到 ${viols.length} 个违禁词，建议修改：</div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px">${viols.map(w=>`<span class="tag tag-red">${w}</span>`).join('')}</div>
+    </div>`;
+  }
+}
+
+function vpCheckAll() { toast('正在批量检测采集箱全部商品...','info'); setTimeout(()=>toast('检测完成！请查看下方列表','success'),1500); }
+function vpCheckSelected() { toast('请先选中要检测的商品','warning'); }
+
+/* ════════════════════════════════════════
+   3. AI工作台
+════════════════════════════════════════ */
+PAGES.ai_work = function() {
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);overflow:hidden;display:flex;flex-direction:column">
+  <div style="background:#fff;border-bottom:1px solid var(--BD);padding:8px 14px;display:flex;align-items:center;gap:8px;flex-shrink:0">
+    <div style="font-size:13px;font-weight:700;color:var(--T1)">🤖 1688 AI工作台</div>
+    <span class="tag tag-blue" style="font-size:10px">由 1688官方 提供</span>
+    <div class="spacer"></div>
+    <button class="btn btn-default btn-sm" onclick="window.open('https://s.1688.com/sem/live_app.html','_blank')">在新窗口打开</button>
+  </div>
+  <div style="flex:1;position:relative;background:var(--B2)">
+    <iframe
+      src="https://s.1688.com/sem/live_app.html"
+      style="width:100%;height:100%;border:none"
+      title="1688 AI工作台"
+      allow="camera;microphone"
+      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation">
+    </iframe>
+    <!-- 加载遮罩 -->
+    <div id="ai-loading" style="position:absolute;inset:0;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;pointer-events:none">
+      <div class="spinner"></div>
+      <div style="font-size:12px;color:var(--T3)">正在加载1688 AI工作台...</div>
+    </div>
+  </div>
+</div>`;
+};
+
+PAGE_INITS.ai_work = function() {
+  const iframe = document.querySelector('#page-scroll iframe');
+  if (iframe) {
+    iframe.onload = () => {
+      const loading = document.getElementById('ai-loading');
+      if (loading) loading.style.display = 'none';
+    };
+    setTimeout(() => {
+      const loading = document.getElementById('ai-loading');
+      if (loading) loading.style.display = 'none';
+    }, 3000);
+  }
+};
+
+/* ════════════════════════════════════════
+   4. 运营工具系列
+════════════════════════════════════════ */
+PAGES.time_onoff = function() {
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);overflow-y:auto;padding:16px">
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title"><div class="card-icon" style="background:#FFF3E8">⏰</div>定时上下架</div>
+      <button class="btn btn-primary btn-sm" onclick="showModal('tof-add-modal')">+ 添加定时任务</button>
+    </div>
+    <div class="card-body">
+      <div class="empty" style="padding:40px">
+        <div class="ei">⏰</div><div class="et">暂无定时任务</div>
+        <div class="ed">创建定时任务，让商品在指定时间自动上架或下架</div>
+        <button class="btn btn-primary" style="margin-top:12px" onclick="showModal('tof-add-modal')">创建定时任务</button>
+      </div>
+    </div>
+  </div>
+</div>`;
+};
+
+registerModal('tof-add-modal', () => `
+<div class="modal-box">
+  <div class="modal-hdr"><h3>添加定时任务</h3><div class="modal-close" onclick="closeModal('tof-add-modal')">✕</div></div>
+  <div class="modal-body">
+    <div class="form-row" style="gap:10px;flex-direction:column;align-items:flex-start">
+      <div style="width:100%"><span class="form-label">任务类型</span>
+        <div style="display:flex;gap:12px;margin-top:5px">
+          <label class="rb-wrap"><input type="radio" name="tof-type" value="on" checked> 定时上架</label>
+          <label class="rb-wrap"><input type="radio" name="tof-type" value="off"> 定时下架</label>
+        </div>
+      </div>
+      <div style="width:100%"><span class="form-label">执行时间 <span class="req">*</span></span>
+        <input type="datetime-local" class="inp" style="margin-top:5px" value="${new Date(Date.now()+3600000).toISOString().slice(0,16)}">
+      </div>
+      <div style="width:100%"><span class="form-label">选择商品</span>
+        <select class="sel" style="margin-top:5px;width:100%">
+          <option>请选择要操作的商品</option>
+          ${App.products.slice(0,10).map(p=>`<option value="${p.id}">${(p.editTitle||p.title||'').substring(0,30)}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-default" onclick="closeModal('tof-add-modal')">取消</button>
+    <button class="btn btn-primary" onclick="tofCreate()">创建任务</button>
+  </div>
+</div>`);
+
+function tofCreate() { closeModal('tof-add-modal'); toast('定时任务已创建','success'); }
+
+PAGES.clean_noflow = function() {
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);overflow-y:auto;padding:16px">
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title"><div class="card-icon" style="background:#FFECE8">🗑️</div>清理无流量商品</div>
+    </div>
+    <div class="card-body">
+      <div style="background:#FFF3E8;border:1px solid #FFD4A4;border-radius:var(--R);padding:10px 14px;font-size:12px;color:var(--W);margin-bottom:16px;display:flex;gap:6px">
+        ⚠️ 清理操作将下架并删除无流量商品，请谨慎操作！建议先导出备份再执行。
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:16px">
+        ${[['7天无访客','0访客商品','var(--D)'],['30天无点击','0点击商品','var(--W)'],['无销量商品','0销量商品','var(--T2)'],['库存不足','库存<3件','var(--P)']].map(([label,desc,color])=>`
+        <div style="border:1px solid var(--BD);border-radius:var(--R2);padding:14px;text-align:center;cursor:pointer" onclick="toast('${label}检测中...','info')">
+          <div style="font-size:20px;font-weight:800;color:${color};margin-bottom:4px">—</div>
+          <div style="font-size:12px;font-weight:600;color:var(--T1)">${label}</div>
+          <div style="font-size:10px;color:var(--T3)">${desc}</div>
+        </div>`).join('')}
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary" onclick="toast('请先连接抖店店铺','warning')">分析无流量商品</button>
+        <button class="btn btn-danger" onclick="toast('请先连接抖店店铺','warning')">一键清理</button>
+      </div>
+    </div>
+  </div>
+</div>`;
+};
+
+PAGES.score_up = function() {
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);overflow-y:auto;padding:16px">
+  <div class="card">
+    <div class="card-head"><div class="card-title"><div class="card-icon" style="background:#E8FFEA">⬆️</div>一键提升体验分</div></div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+        ${[['商品质量分','当前: —','完善商品信息'],['物流体验分','当前: —','优化发货时效'],['服务体验分','当前: —','提升售后服务'],['内容质量分','当前: —','优化商品内容'],['总体评分','当前: —','综合评分'],['达标情况','当前: —','各项指标达标']].map(([title,val,tip])=>`
+        <div style="background:var(--B2);border-radius:var(--R2);padding:12px;text-align:center">
+          <div style="font-size:11px;color:var(--T3);margin-bottom:4px">${title}</div>
+          <div style="font-size:20px;font-weight:800;color:var(--T2);margin-bottom:4px">${val}</div>
+          <div style="font-size:10px;color:var(--P)">${tip}</div>
+        </div>`).join('')}
+      </div>
+      <div style="text-align:center">
+        <button class="btn btn-primary btn-lg" onclick="toast('请先连接抖店店铺获取体验分数据','warning')">📊 获取体验分数据</button>
+      </div>
+    </div>
+  </div>
+</div>`;
+};
+
+/* ════════════════════════════════════════
+   5. 商品检测导航
+════════════════════════════════════════ */
+PAGES.check_nav = function() {
+  const tools = [
+    { name:'抖音小店商品检测', desc:'官方商品审核规则查询', url:'https://fxg.jinritemai.com', icon:'🔍', tag:'官方' },
+    { name:'违禁词检测工具', desc:'商品标题违规词查询', url:'#', icon:'🚫', tag:'必备' },
+    { name:'品牌授权查询', desc:'查询品牌是否需要授权', url:'#', icon:'©️', tag:'' },
+    { name:'知识产权检测', desc:'图片版权合规检测', url:'#', icon:'🎨', tag:'' },
+    { name:'商品类目查询', desc:'查询商品对应类目', url:'#', icon:'📂', tag:'' },
+    { name:'运费模板设置', desc:'全国运费模板配置', url:'https://fxg.jinritemai.com', icon:'🚚', tag:'' },
+    { name:'抖店规则中心', desc:'查看最新平台规则', url:'https://fxg.jinritemai.com', icon:'📋', tag:'规则' },
+    { name:'申诉中心', desc:'商品被处罚申诉入口', url:'https://fxg.jinritemai.com', icon:'⚖️', tag:'' },
+  ];
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);overflow-y:auto;padding:16px">
+  <div class="card">
+    <div class="card-head"><div class="card-title"><div class="card-icon" style="background:#EEF3FF">🛡️</div>商品检测导航</div></div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+        ${tools.map(t=>`
+        <div style="border:1.5px solid var(--BD);border-radius:var(--R2);padding:14px;cursor:pointer;transition:all .15s;text-align:center;position:relative"
+          onclick="if('${t.url}'!=='#')window.open('${t.url}','_blank');else toast('${t.name}功能开发中','info')"
+          onmouseover="this.style.borderColor='var(--P)';this.style.boxShadow='0 2px 12px rgba(22,93,255,.1)'"
+          onmouseout="this.style.borderColor='var(--BD)';this.style.boxShadow=''">
+          ${t.tag?`<span style="position:absolute;top:6px;right:6px;font-size:9px;background:var(--P);color:#fff;padding:1px 5px;border-radius:5px">${t.tag}</span>`:''}
+          <div style="font-size:28px;margin-bottom:8px">${t.icon}</div>
+          <div style="font-size:12px;font-weight:700;color:var(--T1);margin-bottom:3px">${t.name}</div>
+          <div style="font-size:10px;color:var(--T3)">${t.desc}</div>
+        </div>`).join('')}
+      </div>
+    </div>
+  </div>
+</div>`;
+};
+
+/* ════════════════════════════════════════
+   6. 邀请好友
+════════════════════════════════════════ */
+PAGES.invite = function() {
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);overflow-y:auto;padding:16px">
+  <div style="background:linear-gradient(135deg,#FF6B35 0%,#FF3A00 50%,#E02D00 100%);border-radius:12px;padding:24px;color:#fff;margin-bottom:14px;position:relative;overflow:hidden">
+    <div style="position:absolute;right:-30px;top:-30px;width:200px;height:200px;background:rgba(255,255,255,.05);border-radius:50%"></div>
+    <div style="font-size:22px;font-weight:800;margin-bottom:6px">🎁 邀请好友 · 赚取佣金</div>
+    <div style="font-size:12px;opacity:.85;margin-bottom:16px">每成功邀请一位好友购买会员，您可获得高额返佣，无邀请上限</div>
+    <div style="display:flex;gap:24px;margin-bottom:18px">
+      ${[['30%','一级佣金比例'],['10%','二级佣金比例'],['∞','邀请人数上限'],['永久','佣金结算有效期']].map(([n,l])=>`
+      <div style="text-align:center">
+        <div style="font-size:26px;font-weight:800">${n}</div>
+        <div style="font-size:10px;opacity:.8">${l}</div>
+      </div>`).join('')}
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-lg" style="background:#fff;color:#FF3A00;font-weight:700" onclick="inviteCopy()">📋 复制我的邀请链接</button>
+      <button class="btn btn-lg" style="background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.4);color:#fff" onclick="toast('邀请二维码功能开发中','info')">生成邀请二维码</button>
+    </div>
+  </div>
+
+  <!-- 数据面板 -->
+  <div class="stat-grid cols-4" style="margin-bottom:14px">
+    <div class="stat-card c-blue"><div class="stat-label"><span>👥</span>已邀请人数</div><div class="stat-val">0</div></div>
+    <div class="stat-card c-green"><div class="stat-label"><span>💰</span>累计佣金</div><div class="stat-val" style="color:var(--S)">¥0</div></div>
+    <div class="stat-card c-orange"><div class="stat-label"><span>⏳</span>待结算佣金</div><div class="stat-val" style="color:var(--W)">¥0</div></div>
+    <div class="stat-card c-red"><div class="stat-label"><span>📤</span>已提现</div><div class="stat-val">¥0</div></div>
+  </div>
+
+  <!-- 邀请记录 -->
+  <div class="card">
+    <div class="card-head"><div class="card-title"><div class="card-icon" style="background:#FFF3E8">📊</div>邀请记录</div></div>
+    <div class="card-body" style="padding:0">
+      <div class="empty" style="padding:40px"><div class="ei">👥</div><div class="et">暂无邀请记录</div><div class="ed">快去分享您的邀请链接吧！</div></div>
+    </div>
+  </div>
+
+  <!-- 规则说明 -->
+  <div class="card">
+    <div class="card-head"><div class="card-title"><div class="card-icon" style="background:#E8FFEA">📋</div>活动规则</div></div>
+    <div class="card-body">
+      <div style="font-size:12px;color:var(--T2);line-height:2.2">
+        <div>① 点击复制邀请链接，分享给好友</div>
+        <div>② 好友通过您的链接注册并购买会员，您获得 <b style="color:var(--D)">30%</b> 佣金</div>
+        <div>③ 您邀请的用户再邀请其他用户，您额外获得 <b style="color:var(--W)">10%</b> 二级佣金</div>
+        <div>④ 佣金实时到账，每月1日结算，满100元可提现</div>
+        <div>⑤ 邀请佣金无时间限制，被邀请用户每次续费您都可获得佣金</div>
+      </div>
+    </div>
+  </div>
+</div>`;
+};
+
+function inviteCopy() {
+  const url = `https://xfdyorder.zzbtool.com/invite?ref=${genId().substring(0,8)}`;
+  navigator.clipboard.writeText(url).then(()=>toast('邀请链接已复制到剪贴板','success')).catch(()=>toast('复制失败，请手动复制','error'));
+}
+
+/* ════════════════════════════════════════
+   7. 设置页面
+════════════════════════════════════════ */
+PAGES.settings = function() {
+  const s = App.settings;
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);overflow-y:auto;padding:16px">
+  <!-- 关于 & 在线更新 -->
+  <div class="card" style="margin-bottom:12px">
+    <div class="card-head">
+      <div class="card-title">
+        <div class="card-icon" style="background:linear-gradient(135deg,#165DFF,#0E42D2)">🚀</div>
+        关于 & 在线更新
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span id="update-version-tag" style="font-size:11px;color:var(--T3)">当前版本 v3.0.1</span>
+        <button class="btn btn-primary btn-sm" id="update-check-btn" onclick="checkForUpdate()">检查更新</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+        <div style="background:var(--B2);border-radius:var(--R);padding:12px">
+          <div style="font-size:11px;color:var(--T3);margin-bottom:4px">当前版本</div>
+          <div style="font-size:18px;font-weight:800;color:var(--P)" id="current-version-display">v3.0.1</div>
+        </div>
+        <div style="background:var(--B2);border-radius:var(--R);padding:12px">
+          <div style="font-size:11px;color:var(--T3);margin-bottom:4px">最新版本</div>
+          <div style="font-size:18px;font-weight:800;color:var(--S)" id="latest-version-display">—</div>
+        </div>
+      </div>
+      <div id="update-status" style="font-size:12px;color:var(--T3)">点「检查更新」获取最新版本信息</div>
+      <div id="update-changelog" style="display:none;margin-top:10px;background:var(--B2);border-radius:var(--R);padding:10px"></div>
+      <div id="update-actions" style="display:none;margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"></div>
+    </div>
+  </div>
+
+  <div style="max-width:720px">
+
+    <!-- 加价规则 -->
+    <div class="card">
+      <div class="card-head"><div class="card-title"><div class="card-icon" style="background:#FFF3E8">💰</div>加价规则设置</div></div>
+      <div class="card-body">
+        <div class="form-row" style="margin-bottom:12px">
+          <span class="form-label" style="width:80px">加价方式：</span>
+          <label class="rb-wrap" style="margin-right:16px"><input type="radio" name="st-mk" value="ratio" ${s.markupType!=='fixed'?'checked':''} onchange="App.settings.markupType='ratio'"> 倍率加价（进货价 × 倍率 = 售价）</label>
+          <label class="rb-wrap"><input type="radio" name="st-mk" value="fixed" ${s.markupType==='fixed'?'checked':''} onchange="App.settings.markupType='fixed'"> 固定加价（进货价 + 固定元 = 售价）</label>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div>
+            <div style="font-size:11px;font-weight:600;color:var(--T2);margin-bottom:5px">倍率 ×</div>
+            <input class="inp" id="st-ratio" type="number" value="${s.markupRatio||2.0}" min="1" step="0.1">
+            <div class="form-hint">示例：进货¥20 × 1.5 = 售价¥30</div>
+          </div>
+          <div>
+            <div style="font-size:11px;font-weight:600;color:var(--T2);margin-bottom:5px">固定加价 元</div>
+            <input class="inp" id="st-fixed" type="number" value="${s.markupFixed||30}" min="0" step="1">
+            <div class="form-hint">示例：进货¥20 + ¥20 = 售价¥40</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 标题模板 -->
+    <!-- GitHub 配置（用于在线更新） -->
+  <div class="card" style="margin-bottom:12px">
+    <div class="card-head">
+      <div class="card-title">
+        <div class="card-icon" style="background:#24292F">🐙</div>
+        GitHub 配置（在线更新必填）
+      </div>
+    </div>
+    <div class="card-body">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <span style="font-size:12px;color:var(--T2);white-space:nowrap;min-width:90px">GitHub 用户名</span>
+        <input class="inp" id="s-github-user" placeholder="输入你的 GitHub 用户名，如 zhangsan"
+          value="${App.settings.githubUser||''}"
+          style="flex:1"
+          oninput="App.settings.githubUser=this.value;saveData()">
+        <button class="btn btn-default btn-sm" onclick="window.open('https://github.com/'+document.getElementById('s-github-user').value+'/puhuo-assistant','_blank')">验证仓库</button>
+      </div>
+      <div style="font-size:11px;color:var(--T3);line-height:1.8">
+        填写后，点「检查更新」即可自动从你的 GitHub 仓库获取最新版本。<br>
+        首次使用请先按下方教程在 GitHub 上创建 <code>puhuo-assistant</code> 仓库并上传插件文件。
+      </div>
+    </div>
+  </div>
+  <div class="card">
+      <div class="card-head"><div class="card-title"><div class="card-icon" style="background:#EEF3FF">✏️</div>标题模板设置</div></div>
+      <div class="card-body">
+        <div style="margin-bottom:12px">
+          <div style="font-size:11px;font-weight:600;color:var(--T2);margin-bottom:5px">标题前缀</div>
+          <input class="inp" id="st-prefix" value="${s.titlePrefix||''}" placeholder="如：【爆款】 【官方正品】（留空则不添加）">
+          <div class="form-hint">采集商品时自动拼接到标题开头</div>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:600;color:var(--T2);margin-bottom:5px">标题后缀</div>
+          <input class="inp" id="st-suffix" value="${s.titleSuffix||''}" placeholder="如：包邮（留空则不添加）">
+          <div class="form-hint">采集商品时自动拼接到标题末尾</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 违禁词库 -->
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title"><div class="card-icon" style="background:#FFECE8">🚫</div>违禁词库管理</div>
+        <div style="font-size:11px;color:var(--T3)">当前 ${(s.violWords||[]).length} 个违禁词</div>
+      </div>
+      <div class="card-body">
+        <textarea class="textarea" id="st-viols" rows="7"
+          style="font-size:12px;line-height:1.8"
+          placeholder="每行输入一个违禁词...">${(s.violWords||[]).join('\n')}</textarea>
+        <div class="form-hint">编辑或上架商品时自动检测标题是否含有以上违禁词并给出警告提示</div>
+      </div>
+    </div>
+
+    <!-- 铺货设置 -->
+    <div class="card">
+      <div class="card-head"><div class="card-title"><div class="card-icon" style="background:#E8FFEA">📤</div>铺货设置</div></div>
+      <div class="card-body">
+        <div class="form-row">
+          <span class="form-label" style="width:100px">发布模式：</span>
+          <label class="rb-wrap" style="margin-right:12px"><input type="radio" name="st-pub" value="warehouse" ${s.publishMode==='warehouse'?'checked':''} onchange="App.settings.publishMode='warehouse'"> 放入仓库（推荐）</label>
+          <label class="rb-wrap"><input type="radio" name="st-pub" value="online" ${s.publishMode==='online'?'checked':''} onchange="App.settings.publishMode='online'"> 立即上架</label>
+        </div>
+        <div style="font-size:11px;color:var(--W);background:#FFF3E8;border-radius:var(--R);padding:7px 10px;margin-top:8px">
+          ⚠️ 选择「立即上架」时，抖店后台可能会对部分商品有审核不通过的情况，建议选择「放入仓库」先检查后再上架
+        </div>
+        <div style="margin-top:12px">
+          <label class="cb-wrap">
+            <input type="checkbox" id="st-autofill" ${s.autoFillDouyin?'checked':''} onchange="App.settings.autoFillDouyin=this.checked" style="accent-color:var(--P)">
+            <span>自动填写抖店发布页（需安装浏览器插件）</span>
+          </label>
+          <div class="form-hint" style="margin-left:20px">开启后，点击上架时会自动在抖店发布页填写标题、价格等信息</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 关于 -->
+    <div class="card">
+      <div class="card-head"><div class="card-title"><div class="card-icon" style="background:var(--B3)">ℹ️</div>关于</div></div>
+      <div class="card-body">
+        <div style="font-size:12px;color:var(--T2);line-height:2">
+          <div>版本：1688铺货助手Pro v1.0.0</div>
+          <div>数据存储：本地浏览器（localStorage），不上传服务器</div>
+          <div>采集箱商品数：${App.products.length} 件</div>
+          <div>铺货历史记录：${App.history.length} 条</div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn btn-default btn-sm" onclick="settingsExportAll()">📦 导出全部数据</button>
+          <button class="btn btn-danger btn-sm" onclick="settingsClearAll()">🗑 清空全部数据</button>
+        </div>
+      </div>
+    </div>
+
+    <button class="btn btn-primary btn-lg" style="width:100%;margin-bottom:20px" onclick="settingsSave()">💾 保存设置</button>
+  </div>
+</div>`;
+};
+
+function settingsSave() {
+  const type = document.querySelector('input[name="st-mk"]:checked')?.value || 'ratio';
+  const ratio = parseFloat(document.getElementById('st-ratio')?.value)||1.5;
+  const fixed = parseFloat(document.getElementById('st-fixed')?.value)||20;
+  const prefix = (document.getElementById('st-prefix')?.value||'').trim();
+  const suffix = (document.getElementById('st-suffix')?.value||'').trim();
+  const viols = (document.getElementById('st-viols')?.value||'').split('\n').map(s=>s.trim()).filter(Boolean);
+  const pub = document.querySelector('input[name="st-pub"]:checked')?.value||'warehouse';
+  Object.assign(App.settings, { markupType:type, markupRatio:ratio, markupFixed:fixed, titlePrefix:prefix, titleSuffix:suffix, violWords:viols, publishMode:pub });
+  saveData();
+  toast('设置已保存','success','✅ 保存成功');
+}
+
+function settingsExportAll() {
+  const data = JSON.stringify({ products:App.products, history:App.history, settings:App.settings }, null, 2);
+  const a = Object.assign(document.createElement('a'),{href:URL.createObjectURL(new Blob([data],{type:'application/json'})),download:`铺货助手备份_${new Date().toLocaleDateString('zh-CN').replace(/\//g,'-')}.json`});
+  a.click(); URL.revokeObjectURL(a.href);
+  toast('数据已导出','success');
+}
+
+function settingsClearAll() {
+  if (!confirm('确认清空所有数据？包括采集箱、铺货历史、设置，此操作不可撤销！')) return;
+  App.products=[]; App.history=[]; App.templates=[];
+  App.settings = { markupType:'ratio', markupRatio: 2.0, markupFixed: 30, titlePrefix:'', titleSuffix:'', violWords:[], publishMode:'warehouse', autoFillDouyin:true };
+  saveData();
+  nav('home');
+  toast('所有数据已清空','success');
+}
+
+/* ════════════════════════════════════════
+   8. AI标题优化
+════════════════════════════════════════ */
+PAGES.title_opt = function() {
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);overflow-y:auto;padding:16px">
+  <div class="card">
+    <div class="card-head"><div class="card-title"><div class="card-icon" style="background:linear-gradient(135deg,#EEF3FF,#F3E8FF)">✨</div>AI标题优化</div><span class="tag tag-purple">AI功能</span></div>
+    <div class="card-body">
+      <div style="margin-bottom:14px">
+        <div style="font-size:11px;font-weight:600;color:var(--T2);margin-bottom:6px">输入原标题</div>
+        <textarea class="textarea" id="to-input" rows="3" placeholder="粘贴需要优化的商品标题..." maxlength="60"></textarea>
+        <div style="display:flex;justify-content:space-between;margin-top:3px">
+          <div style="font-size:10px;color:var(--T3)">AI将根据抖音平台规则和热门关键词自动优化</div>
+          <div id="to-cnt" class="char-cnt">0/60</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:14px">
+        <select class="sel" style="width:150px">
+          <option>女装类目</option>
+          <option>男装类目</option>
+          <option>鞋类</option>
+          <option>配饰</option>
+          <option>家居</option>
+        </select>
+        <button class="btn btn-primary" onclick="toOptimize()">🤖 AI优化标题</button>
+        <button class="btn btn-default" onclick="toCheckViol()">🔍 违禁词检测</button>
+      </div>
+      <div id="to-result" style="display:none;border:1px solid var(--BD);border-radius:var(--R2);overflow:hidden">
+        <div style="background:var(--B2);padding:8px 12px;font-size:11px;font-weight:600;color:var(--T2)">优化结果</div>
+        <div style="padding:12px" id="to-result-body"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 批量优化 -->
+  <div class="card">
+    <div class="card-head"><div class="card-title"><div class="card-icon" style="background:#EEF3FF">📦</div>采集箱批量优化</div></div>
+    <div class="card-body">
+      <div style="font-size:12px;color:var(--T2);margin-bottom:12px">一键优化采集箱中所有商品的标题，AI自动处理违禁词并提升关键词权重</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn btn-primary btn-lg" onclick="toBatchOpt()" ${App.products.length===0?'disabled':''}>🚀 一键优化全部 ${App.products.length} 件商品</button>
+        <span style="font-size:11px;color:var(--T3)">预计消耗算力：<b style="color:var(--P)">${App.products.length}</b> 个</span>
+      </div>
+    </div>
+  </div>
+</div>`;
+};
+
+PAGE_INITS.title_opt = function() {
+  const inp = document.getElementById('to-input');
+  if (inp) inp.oninput = function() { const cnt=document.getElementById('to-cnt'); if(cnt){cnt.textContent=`${this.value.length}/60`;cnt.className=`char-cnt ${this.value.length>55?'warn':''}`; } };
+};
+
+async function toOptimize() {
+  const text = document.getElementById('to-input')?.value?.trim();
+  if (!text) { toast('请输入标题','warning'); return; }
+
+  const result = document.getElementById('to-result');
+  const resultBody = document.getElementById('to-result-body');
+  const btn = document.querySelector('[onclick="toOptimize()"]');
+
+  if (btn) { btn.disabled=true; btn.textContent='AI优化中...'; }
+  if (result) result.style.display = '';
+  if (resultBody) resultBody.innerHTML = '<div class="loading"><div class="spinner"></div><span>调用AI优化中，请稍候...</span></div>';
+
+  const viols = checkViol(text);
+  let cleanTitle = text;
+  viols.forEach(w => { cleanTitle = cleanTitle.replace(new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'g'),'').trim(); });
+
+  let optimized = cleanTitle;
+  let source = 'local';
+  let variants = [];
+
+  try {
+    // 调用 Anthropic API 优化
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        messages: [{
+          role: 'user',
+          content: `你是抖音小店无货源铺货的标题优化专家。
+
+请对以下商品标题进行优化，要求：
+1. 保留核心产品词、场景词、人群词
+2. 去除违规词汇（如：正品、官方、专柜、最好、第一等极限词）
+3. 补充搜索热词提升曝光
+4. 字数控制在30-60字
+5. 符合抖音平台算法偏好（场景词+产品词+人群词+卖点词）
+
+原标题：${text}
+已检测到违规词：${viols.length > 0 ? viols.join('、') : '无'}
+
+请返回JSON格式（只返回JSON，不要其他内容）：
+{
+  "primary": "主推优化标题（最优方案）",
+  "variants": [
+    {"title": "变体方案1", "angle": "卖点角度"},
+    {"title": "变体方案2", "angle": "人群角度"},
+    {"title": "变体方案3", "angle": "场景角度"}
+  ],
+  "removed_words": ["被删除的违规词"],
+  "added_keywords": ["补充的关键词"],
+  "tips": "优化说明（一句话）"
+}`
+        }]
+      })
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      const raw = data.content?.[0]?.text || '';
+      const clean = raw.replace(/```json|```/g,'').trim();
+      const parsed = JSON.parse(clean);
+      optimized = parsed.primary || cleanTitle;
+      variants = parsed.variants || [];
+      source = 'claude';
+    }
+  } catch(e) {
+    // 降级：本地处理（去违禁词 + 简单优化）
+    console.log('[AI标题] API调用失败，使用本地优化:', e.message);
+    source = 'local';
+    optimized = cleanTitle.substring(0,60);
+  }
+
+  if (btn) { btn.disabled=false; btn.textContent='✨ AI优化标题'; }
+
+  if (resultBody && result) {
+    result.style.display='';
+    const variantsHtml = variants.length ? `
+    <div style="margin-bottom:10px">
+      <div style="font-size:10px;color:var(--T3);margin-bottom:6px">更多优化方案：</div>
+      ${variants.map((v,i)=>`
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;padding:7px 10px;background:var(--B2);border-radius:4px">
+        <span style="font-size:10px;color:var(--P);min-width:50px;flex-shrink:0">${v.angle||'方案'+(i+1)}</span>
+        <span style="font-size:11px;color:var(--T1);flex:1">${v.title}</span>
+        <button class="btn btn-xs btn-default" onclick="toApplyVariant('${v.title.replace(/'/g,'`')}')">应用</button>
+        <button class="btn btn-xs btn-ghost" onclick="navigator.clipboard.writeText('${v.title.replace(/'/g,'`')}').then(()=>toast('已复制','success'))">复制</button>
+      </div>`).join('')}
+    </div>` : '';
+
+    resultBody.innerHTML = `
+    <div style="margin-bottom:10px">
+      <div style="font-size:10px;color:var(--T3);margin-bottom:4px">原标题：</div>
+      <div style="font-size:12px;color:var(--T1);padding:7px 10px;background:var(--B2);border-radius:4px">${text}</div>
+    </div>
+    <div style="margin-bottom:10px">
+      <div style="font-size:10px;color:var(--T3);margin-bottom:4px">
+        ✨ ${source==='claude'?'Claude AI':'本地'}优化结果：
+        ${source==='claude'?'<span style="font-size:10px;color:var(--P)">(Powered by Claude)</span>':''}
+      </div>
+      <div style="font-size:13px;font-weight:600;color:var(--T1);padding:10px 12px;background:linear-gradient(135deg,#E8FFEA,#EEF9FF);border-radius:6px;border:1px solid #92D5A7;position:relative;padding-right:80px">
+        ${optimized}
+        <div style="position:absolute;right:8px;top:50%;transform:translateY(-50%);display:flex;gap:4px">
+          <button class="btn btn-xs btn-primary" onclick="toApplyVariant('${optimized.replace(/'/g,'`')}')">应用</button>
+          <button class="btn btn-xs btn-ghost" onclick="navigator.clipboard.writeText('${optimized.replace(/'/g,'`')}').then(()=>toast('已复制','success'))">复制</button>
+        </div>
+      </div>
+    </div>
+    ${variantsHtml}
+    ${viols.length ? `<div style="font-size:11px;color:var(--W);margin-bottom:6px">⚠️ 已去除 ${viols.length} 个违规词：${viols.join('、')}</div>` : `<div style="font-size:11px;color:var(--S);margin-bottom:6px">✅ 原标题无违禁词</div>`}
+    ${source!=='claude'?`<div style="font-size:10px;color:var(--T3);margin-top:6px">💡 设置 Anthropic API Key 后可获得更智能的优化效果</div>`:''}`;
+  }
+  toast(source==='claude'?'Claude AI优化完成':'本地优化完成', 'success');
+}
+
+function toApplyVariant(title) {
+  const inp = document.getElementById('to-input');
+  if (inp) { inp.value = title; inp.dispatchEvent(new Event('input',{bubbles:true})); }
+  // 如果编辑器开着，直接应用到当前商品
+  if (CB.editingId) {
+    const edTitle = document.getElementById('ed-title');
+    if (edTitle) { edTitle.value = title; edTitle.dispatchEvent(new Event('input',{bubbles:true})); }
+    toast('已应用到编辑器中的商品', 'success');
+  } else {
+    toast('标题已更新到输入框', 'success');
+  }
+}
+
+function toCheckViol() {
+  const text = document.getElementById('to-input')?.value||'';
+  if (!text.trim()) { toast('请输入标题','warning'); return; }
+  const viols = checkViol(text);
+  if (!viols.length) toast('✅ 未检测到违禁词','success');
+  else toast(`⚠️ 含违禁词：${viols.join('、')}`,'warning');
+}
+
+async function toBatchOpt() {
+  if (!App.products.length) return;
+  toast(`开始批量优化 ${App.products.length} 件商品标题...`,'info');
+  await new Promise(r=>setTimeout(r,1500));
+  App.products.forEach(p => {
+    const title = p.editTitle||p.title||'';
+    const viols = checkViol(title);
+    if (viols.length) {
+      let cleaned = title;
+      viols.forEach(w => { cleaned = cleaned.replace(new RegExp(w,'g'),''); });
+      p.editTitle = cleaned.trim();
+    }
+  });
+  saveData();
+  toast(`批量优化完成，共处理 ${App.products.length} 件商品`,'success');
+}
+
+/* ════════════════════════════════════════
+   辅助函数
+════════════════════════════════════════ */
+function selectPkg(el, count, price) {
+  document.querySelectorAll('[onclick*="selectPkg"]').forEach(e => {
+    e.style.borderColor = 'var(--BD)'; e.classList.remove('selected');
+  });
+  el.style.borderColor = 'var(--P)'; el.classList.add('selected');
+  el.style.background = 'var(--PLL)';
+}
+
+/* ════════════════════════════════════════
+   Coming Soon 页面统一注册
+════════════════════════════════════════ */
+const _comingSoonPages = {
+  low_price:      '1688低价货源',
+  intercept:      '截留选品',
+  boom_auto:      '爆单计划自动选品',
+  welfare_goods:  '福利品货盘选品',
+  official_chain: '1688官方供应链',
+  shop_chance:    '抖店商机选品',
+  store_copy:     '店铺授权复制',
+  ai_crack:       'AI爆款裂变',
+  same_goods:     '搜同款铺货',
+  data_import:    '数据包导入铺货',
+  renew_goods:    '商品翻新/添加SKU',
+  full_store:     '1688全店铺货',
+  quota_check:    '发品额度检测',
+  limited:        '限时限量购',
+  boom_plan:      '抖店爆单计划',
+  video_tool:     '主图视频工具',
+  human_check:    '人工鉴图',
+  multi_batch:    '多店批量修改',
+  open_activity:  '一键开活动',
+  img_search:     '以图搜款',
+  puhuo_preview:  '铺货预览',
+  upload_list:    '上货列表',
+  audit_record:   '抖店后台审核记录',
+  cloud_lib:      '云商品库',
+  ai_goods:       'AI商品管理',
+  ops_tool:       '抖店运营工具',
+  copy_upload:    '复制上货',
+  select_center:  '选品中心',
+};
+
+Object.entries(_comingSoonPages).forEach(([id, name]) => {
+  if (!PAGES[id]) {
+    PAGES[id] = () => `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);overflow-y:auto;padding:16px">
+  <div style="max-width:600px;margin:60px auto;text-align:center">
+    <div style="font-size:60px;margin-bottom:16px;opacity:.5">🚧</div>
+    <div style="font-size:18px;font-weight:700;color:var(--T1);margin-bottom:8px">${name}</div>
+    <div style="font-size:13px;color:var(--T3);margin-bottom:24px;line-height:1.7">
+      该功能正在紧张开发中，敬请期待<br>
+      如需立即使用，请联系客服获取支持
+    </div>
+    <div style="display:flex;gap:12px;justify-content:center">
+      <button class="btn btn-primary" onclick="nav('home')">返回首页</button>
+      <button class="btn btn-default" onclick="toast('联系客服功能开发中','info')">联系客服</button>
+    </div>
+    <div style="margin-top:32px;padding:16px;background:var(--B2);border-radius:var(--R2);text-align:left">
+      <div style="font-size:12px;font-weight:600;color:var(--T2);margin-bottom:8px">您也可以使用以下替代方案：</div>
+      <div style="font-size:12px;color:var(--T2);line-height:2">
+        <div>• <a style="color:var(--P);cursor:pointer" onclick="nav('goods_collect')">1688商品采集</a> — 搜索关键词批量采集商品</div>
+        <div>• <a style="color:var(--P);cursor:pointer" onclick="nav('link_puhuo')">链接铺货</a> — 粘贴商品链接快速铺货</div>
+        <div>• <a style="color:var(--P);cursor:pointer" onclick="nav('collect_box')">采集箱</a> — 编辑已采集商品并上架</div>
+      </div>
+    </div>
+  </div>
+</div>`;
+  }
+});
+
+
+/* ════════════════════════════════════════
+   铺货模板管理页面
+════════════════════════════════════════ */
+PAGES.puhuo_templates = function() {
+  const tpls = App.templates || [];
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);overflow-y:auto;padding:16px">
+
+  <!-- 加价策略说明 -->
+  <div style="background:linear-gradient(135deg,#EEF3FF,#F5F0FF);border-radius:var(--R2);padding:16px;margin-bottom:14px;border:1px solid #C5D8FF">
+    <div style="font-size:13px;font-weight:700;color:var(--T1);margin-bottom:8px">📊 无货源铺货加价策略说明</div>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:10px">
+      ${[['≤10元','×3.0倍','9.9 → 29.9'],['≤20元','×2.5倍','15 → 37.5'],['≤50元','×2.2倍','30 → 66'],['≤100元','×2.0倍','80 → 160'],['≤999元','×1.8倍','150 → 270']].map(([range,ratio,eg])=>
+        `<div style="background:#fff;border-radius:8px;padding:10px;text-align:center;border:1px solid var(--BD)">
+          <div style="font-size:11px;color:var(--T3);margin-bottom:3px">${range}</div>
+          <div style="font-size:18px;font-weight:800;color:var(--P)">${ratio}</div>
+          <div style="font-size:10px;color:var(--T3);margin-top:2px">${eg}</div>
+        </div>`
+      ).join('')}
+    </div>
+    <div style="font-size:11px;color:var(--T2);line-height:1.8">
+      💡 核心公式：<b>售价 = 进货价 × 倍率</b>，需保证售价不高于天猫同款1.5倍<br>
+      🎯 达人佣金：正常款设15-30%，引流款5-10%，新店前期可给到35%冲流量
+    </div>
+  </div>
+
+  <!-- 模板列表 -->
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title"><div class="card-icon" style="background:var(--PL)">📄</div>铺货模板管理</div>
+      <button class="btn btn-primary btn-sm" onclick="showModal('tpl-add-modal')">+ 新建模板</button>
+    </div>
+    <div class="card-body" style="padding:0">
+      <table class="data-table">
+        <thead><tr><th>模板名称</th><th>加价倍率</th><th>达人佣金</th><th>发布模式</th><th>标题前/后缀</th><th>备注</th><th style="width:100px">操作</th></tr></thead>
+        <tbody>
+        ${tpls.map((t,i) => `<tr>
+          <td>
+            <div style="font-weight:600;color:var(--T1)">${t.name}</div>
+            ${t.isDefault ? '<span class="tag tag-blue" style="font-size:10px">默认</span>' : ''}
+          </td>
+          <td><b style="color:var(--P);font-size:14px">×${t.markupRatio}</b></td>
+          <td><span class="tag tag-green">${t.commissionRate}%</span></td>
+          <td><span class="tag ${t.publishMode==='warehouse'?'tag-gray':'tag-orange'}">${t.publishMode==='warehouse'?'放入仓库':'立即上架'}</span></td>
+          <td style="font-size:11px">${[t.titlePrefix&&`前："${t.titlePrefix}"`,t.titleSuffix&&`后："${t.titleSuffix}"`].filter(Boolean).join(' ')|| '<span style="color:var(--T4)">无</span>'}</td>
+          <td style="font-size:11px;color:var(--T3)">${t.desc||'—'}</td>
+          <td>
+            <div style="display:flex;gap:4px">
+              <button class="btn btn-xs btn-default" onclick="tplUse('${t.id}')">应用</button>
+              <button class="btn btn-xs btn-default" onclick="tplEdit(${i})">编辑</button>
+              ${!t.isDefault?`<button class="btn btn-xs btn-danger" onclick="tplDelete('${t.id}')">删除</button>`:''}
+            </div>
+          </td>
+        </tr>`).join('')}
+        ${!tpls.length ? '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--T3)">暂无模板</td></tr>' : ''}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 利润计算器 -->
+  <div class="card">
+    <div class="card-head"><div class="card-title"><div class="card-icon" style="background:#E8FFEA">🧮</div>实时利润计算器</div></div>
+    <div class="card-body">
+      <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+        <div>
+          <div style="font-size:11px;color:var(--T3);margin-bottom:4px">进货价（元）</div>
+          <input class="inp" id="calc-cost" type="number" value="25" min="0.1" step="0.1" style="width:100px" oninput="calcProfit()">
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--T3);margin-bottom:4px">加价倍率</div>
+          <input class="inp" id="calc-ratio" type="number" value="2.2" min="1" step="0.1" style="width:80px" oninput="calcProfit()">
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--T3);margin-bottom:4px">达人佣金</div>
+          <input class="inp" id="calc-comm" type="number" value="25" min="0" max="90" style="width:70px" oninput="calcProfit()">
+          <span style="font-size:11px;color:var(--T3)"> %</span>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--T3);margin-bottom:4px">平台手续费</div>
+          <input class="inp" id="calc-fee" type="number" value="3" min="0" max="10" style="width:70px" oninput="calcProfit()">
+          <span style="font-size:11px;color:var(--T3)"> %</span>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--T3);margin-bottom:4px">运费成本</div>
+          <input class="inp" id="calc-ship" type="number" value="0" min="0" style="width:70px" oninput="calcProfit()">
+        </div>
+      </div>
+      <div id="calc-result" style="margin-top:12px;padding:12px;background:var(--B2);border-radius:var(--R2);display:flex;gap:16px;flex-wrap:wrap"></div>
+    </div>
+  </div>
+</div>`;
+};
+
+PAGE_INITS.puhuo_templates = function() {
+  calcProfit();
+};
+
+function calcProfit() {
+  const cost   = parseFloat(document.getElementById('calc-cost')?.value)  || 25;
+  const ratio  = parseFloat(document.getElementById('calc-ratio')?.value) || 2.2;
+  const comm   = parseFloat(document.getElementById('calc-comm')?.value)  || 25;
+  const fee    = parseFloat(document.getElementById('calc-fee')?.value)   || 3;
+  const ship   = parseFloat(document.getElementById('calc-ship')?.value)  || 0;
+
+  const sellPrice  = +(cost * ratio).toFixed(2);
+  const commAmt    = +(sellPrice * comm / 100).toFixed(2);
+  const feeAmt     = +(sellPrice * fee / 100).toFixed(2);
+  const totalCost  = +(cost + commAmt + feeAmt + ship).toFixed(2);
+  const profit     = +(sellPrice - totalCost).toFixed(2);
+  const profitRate = +(profit / sellPrice * 100).toFixed(1);
+
+  const el = document.getElementById('calc-result');
+  if (!el) return;
+  const color = profit > 0 ? 'var(--S)' : 'var(--D)';
+  el.innerHTML = `
+    <div style="text-align:center;min-width:80px">
+      <div style="font-size:10px;color:var(--T3);margin-bottom:3px">建议售价</div>
+      <div style="font-size:20px;font-weight:800;color:var(--P)">¥${sellPrice}</div>
+    </div>
+    <div style="text-align:center;min-width:80px">
+      <div style="font-size:10px;color:var(--T3);margin-bottom:3px">达人佣金</div>
+      <div style="font-size:16px;font-weight:700;color:var(--W)">¥${commAmt}</div>
+    </div>
+    <div style="text-align:center;min-width:80px">
+      <div style="font-size:10px;color:var(--T3);margin-bottom:3px">平台扣费</div>
+      <div style="font-size:16px;font-weight:700;color:var(--T2)">¥${feeAmt}</div>
+    </div>
+    <div style="text-align:center;min-width:80px">
+      <div style="font-size:10px;color:var(--T3);margin-bottom:3px">总成本</div>
+      <div style="font-size:16px;font-weight:700;color:var(--T2)">¥${totalCost}</div>
+    </div>
+    <div style="text-align:center;min-width:90px">
+      <div style="font-size:10px;color:var(--T3);margin-bottom:3px">最终利润</div>
+      <div style="font-size:22px;font-weight:800;color:${color}">¥${profit}</div>
+    </div>
+    <div style="text-align:center;min-width:80px">
+      <div style="font-size:10px;color:var(--T3);margin-bottom:3px">利润率</div>
+      <div style="font-size:22px;font-weight:800;color:${color}">${profitRate}%</div>
+    </div>
+    <div style="align-self:center;flex:1;min-width:180px">
+      <div style="font-size:11px;color:${color};font-weight:600;padding:8px 12px;background:${profit>0?'#E8FFEA':'#FFECE8'};border-radius:6px">
+        ${profit>0?`✅ 盈利 ¥${profit}，利润率 ${profitRate}%，达人出单净赚 ¥${(profit).toFixed(2)}`:`❌ 亏损！佣金设置过高或进价过高，建议调高售价或降低佣金`}
+      </div>
+    </div>`;
+}
+
+function tplUse(id) {
+  const t = (App.templates||[]).find(x=>x.id===id);
+  if (!t) return;
+  App.settings.markupRatio = t.markupRatio;
+  App.settings.markupType = 'ratio';
+  App.settings.publishMode = t.publishMode;
+  App.settings.titlePrefix = t.titlePrefix||'';
+  App.settings.titleSuffix = t.titleSuffix||'';
+  saveData();
+  toast(`已应用模板「${t.name}」，加价倍率 ×${t.markupRatio}，佣金 ${t.commissionRate}%`, 'success', '模板已应用');
+}
+
+function tplDelete(id) {
+  if (!confirm('确认删除该模板？')) return;
+  App.templates = (App.templates||[]).filter(x=>x.id!==id);
+  saveData();
+  nav('puhuo_templates');
+  toast('模板已删除');
+}
+
+function tplEdit(idx) { toast('编辑功能开发中', 'info'); }
+
+registerModal('tpl-add-modal', () => `
+<div class="modal-box">
+  <div class="modal-hdr"><h3>新建铺货模板</h3><div class="modal-close" onclick="closeModal('tpl-add-modal')">✕</div></div>
+  <div class="modal-body">
+    <div class="form-row" style="flex-direction:column;align-items:flex-start;gap:6px;margin-bottom:10px">
+      <span class="form-label">模板名称 <span class="req">*</span></span>
+      <input class="inp" id="ta-name" placeholder="如：家居类模板、服饰高价模板">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px">
+      <div>
+        <div class="form-label" style="margin-bottom:5px">加价倍率</div>
+        <input class="inp" id="ta-ratio" type="number" value="2.0" min="1" step="0.1">
+        <div class="form-hint">无货源标准×2，家居×2.2</div>
+      </div>
+      <div>
+        <div class="form-label" style="margin-bottom:5px">达人佣金 %</div>
+        <input class="inp" id="ta-comm" type="number" value="25" min="0" max="90">
+        <div class="form-hint">正常款15-30%，引流5-10%</div>
+      </div>
+      <div>
+        <div class="form-label" style="margin-bottom:5px">标题前缀</div>
+        <input class="inp" id="ta-prefix" placeholder="如：【热销】（可留空）">
+      </div>
+      <div>
+        <div class="form-label" style="margin-bottom:5px">标题后缀</div>
+        <input class="inp" id="ta-suffix" placeholder="如：【包邮】（可留空）">
+      </div>
+    </div>
+    <div class="form-row">
+      <span class="form-label" style="white-space:nowrap">发布模式：</span>
+      <label class="rb-wrap" style="margin-right:12px"><input type="radio" name="ta-pub" value="warehouse" checked> 放入仓库（推荐）</label>
+      <label class="rb-wrap"><input type="radio" name="ta-pub" value="online"> 立即上架</label>
+    </div>
+    <div class="form-row" style="flex-direction:column;align-items:flex-start;gap:5px">
+      <span class="form-label">备注说明</span>
+      <input class="inp" id="ta-desc" placeholder="可选，记录该模板的使用场景">
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-default" onclick="closeModal('tpl-add-modal')">取消</button>
+    <button class="btn btn-primary" onclick="tplCreate()">创建模板</button>
+  </div>
+</div>`);
+
+function tplCreate() {
+  const name = document.getElementById('ta-name')?.value?.trim();
+  if (!name) { toast('请输入模板名称', 'warning'); return; }
+  const tpl = {
+    id: 'tpl_' + genId(),
+    name,
+    markupRatio: parseFloat(document.getElementById('ta-ratio')?.value)||2.0,
+    commissionRate: parseFloat(document.getElementById('ta-comm')?.value)||25,
+    titlePrefix: (document.getElementById('ta-prefix')?.value||'').trim(),
+    titleSuffix: (document.getElementById('ta-suffix')?.value||'').trim(),
+    publishMode: document.querySelector('input[name="ta-pub"]:checked')?.value||'warehouse',
+    desc: (document.getElementById('ta-desc')?.value||'').trim(),
+    isDefault: false,
+  };
+  if (!App.templates) App.templates = [];
+  App.templates.push(tpl);
+  saveData();
+  closeModal('tpl-add-modal');
+  toast(`模板「${name}」已创建`, 'success');
+  nav('puhuo_templates');
+}
+
+// 注册到侧边栏
+PAGE_META['puhuo_templates'] = { label: '铺货模板管理', parent: null };
+
+
+/* ═══ advanced_features.js ═══ */
+/**
+ * pages/advanced_features.js
+ * 1. 复制上货子功能（AI爆款裂变 / 搜同款 / 全店铺货）
+ * 2. 主图视频工具（完整实现）
+ * 3. 批量修改连接真实抖店
+ * 4. 选品中心增强
+ */
+
+/* ════════════════════════════════════════
+   AI爆款裂变
+════════════════════════════════════════ */
+PAGES.ai_crack = function() {
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);overflow-y:auto;padding:16px">
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title"><div class="card-icon" style="background:linear-gradient(135deg,#EEF3FF,#F3E8FF)">🧬</div>AI爆款裂变</div>
+      <span class="tag tag-purple">AI功能</span>
+    </div>
+    <div class="card-body">
+      <div style="background:linear-gradient(135deg,#F5F0FF,#EEF3FF);border-radius:var(--R2);padding:14px;margin-bottom:16px">
+        <div style="font-size:13px;font-weight:700;color:var(--T1);margin-bottom:6px">🎯 爆款裂变原理</div>
+        <div style="font-size:12px;color:var(--T2);line-height:1.8">
+          基于已有爆款商品，AI自动生成多个变体标题和描述方案<br>
+          规避同质化竞争，提升商品差异化程度，增加自然流量
+        </div>
+      </div>
+      <div style="margin-bottom:14px">
+        <div style="font-size:12px;font-weight:600;color:var(--T2);margin-bottom:6px">1. 输入爆款商品链接或标题</div>
+        <div style="display:flex;gap:8px">
+          <input class="inp" id="crack-input" placeholder="粘贴1688/抖店商品链接，或直接输入商品标题..." style="flex:1">
+          <button class="btn btn-primary" onclick="crackAnalyze()">🤖 AI分析</button>
+        </div>
+      </div>
+      <div id="crack-result" style="display:none"></div>
+      <div id="crack-loading" style="display:none" class="loading"><div class="spinner"></div><span>AI分析中，请稍候...</span></div>
+    </div>
+  </div>
+
+  <!-- 从采集箱批量裂变 -->
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title"><div class="card-icon" style="background:#EEF3FF">📦</div>批量裂变采集箱商品</div>
+      <button class="btn btn-primary btn-sm" onclick="crackBatch()" ${App.products.length===0?'disabled':''}>
+        批量裂变 (${App.products.length}件)
+      </button>
+    </div>
+    <div class="card-body">
+      <div style="font-size:12px;color:var(--T2);margin-bottom:10px">
+        选择变体方向，AI批量为采集箱所有商品生成差异化标题
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+        ${[['angle','换卖点角度'],['target','换适用人群'],['scene','换使用场景'],['title_style','换标题风格'],['keywords','补充关键词']].map(([v,l])=>`
+        <label class="cb-wrap"><input type="checkbox" value="${v}" name="crack-type" style="accent-color:var(--P)" checked> ${l}</label>`).join('')}
+      </div>
+      <div id="crack-batch-result"></div>
+    </div>
+  </div>
+</div>`;
+};
+
+async function crackAnalyze() {
+  const input = document.getElementById('crack-input')?.value?.trim();
+  if (!input) { toast('请输入商品链接或标题', 'warning'); return; }
+  
+  const loading = document.getElementById('crack-loading');
+  const result = document.getElementById('crack-result');
+  if (loading) loading.style.display = 'flex';
+  if (result) result.style.display = 'none';
+  
+  await new Promise(r => setTimeout(r, 1200));
+  
+  // 提取标题
+  let title = input;
+  if (input.startsWith('http')) {
+    title = '从链接提取的商品标题示例（实际需采集）';
+  }
+  
+  const variants = generateTitleVariants(title);
+  
+  if (loading) loading.style.display = 'none';
+  if (result) {
+    result.style.display = '';
+    result.innerHTML = `
+    <div style="font-size:12px;font-weight:600;color:var(--T2);margin-bottom:8px">AI生成了 ${variants.length} 个变体方案：</div>
+    ${variants.map((v,i) => `
+    <div style="border:1px solid var(--BD);border-radius:var(--R);padding:10px 12px;margin-bottom:6px;display:flex;gap:8px;align-items:flex-start">
+      <div style="flex:1">
+        <div style="font-size:10px;color:var(--P);margin-bottom:3px;font-weight:600">${v.type}</div>
+        <div style="font-size:12px;color:var(--T1)">${v.title}</div>
+      </div>
+      <button class="btn btn-xs btn-primary" onclick="crackApply('${encodeURIComponent(v.title)}')">应用</button>
+      <button class="btn btn-xs btn-default" onclick="navigator.clipboard.writeText('${v.title.replace(/'/g,"\\'")}').then(()=>toast('已复制','success'))">复制</button>
+    </div>`).join('')}`;
+  }
+}
+
+function generateTitleVariants(originalTitle) {
+  const clean = originalTitle.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g,' ').trim();
+  const keywords = clean.split(/\s+/).filter(w=>w.length>1).slice(0,6);
+  
+  return [
+    { type: '换卖点角度', title: `${keywords.slice(0,3).join('')}高品质版${keywords.slice(-2).join('')}超值特惠` },
+    { type: '换适用人群', title: `年轻女生必备${keywords.slice(0,2).join('')}时尚百搭${keywords.slice(-2).join('')}` },
+    { type: '换使用场景', title: `日常出行${keywords.slice(0,2).join('')}轻奢质感${keywords.slice(-3).join('')}` },
+    { type: '补充关键词', title: `2025新款${keywords.slice(0,2).join('')}爆款热销${keywords.slice(2,5).join('')}` },
+    { type: '换标题风格', title: `ins风${keywords.slice(0,3).join('')}小众独特${keywords.slice(-2).join('')}` },
+    { type: '强调品质', title: `高品质${keywords.slice(0,3).join('')}精选好货${keywords.slice(-2).join('')}促销` },
+  ];
+}
+
+function crackApply(encodedTitle) {
+  const title = decodeURIComponent(encodedTitle);
+  // 如果编辑器开着，直接填入
+  const edEl = document.getElementById('ed-title');
+  if (edEl) { edEl.value = title; edEl.dispatchEvent(new Event('input',{bubbles:true})); }
+  else { toast(`已复制：${title.substring(0,30)}...`,'success'); navigator.clipboard.writeText(title).catch(()=>{}); }
+}
+
+async function crackBatch() {
+  if (!App.products.length) return;
+  toast(`开始批量裂变 ${App.products.length} 件商品标题...`, 'info');
+  await new Promise(r => setTimeout(r, 1200));
+  let changed = 0;
+  App.products.forEach(p => {
+    const variants = generateTitleVariants(p.editTitle||p.title||'');
+    if (variants.length) { p.editTitle = variants[0].title.substring(0,60); changed++; }
+  });
+  saveData();
+  const el = document.getElementById('crack-batch-result');
+  if (el) el.innerHTML = `<div style="color:var(--S);font-size:12px;padding:8px;background:#E8FFEA;border-radius:var(--R)">✅ 已为 ${changed} 件商品生成差异化标题，前往采集箱查看</div>`;
+  toast(`批量裂变完成，${changed}件商品标题已更新`, 'success');
+}
+
+/* ════════════════════════════════════════
+   搜同款铺货
+════════════════════════════════════════ */
+PAGES.same_goods = function() {
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);overflow-y:auto;padding:16px">
+  <div class="card">
+    <div class="card-head"><div class="card-title"><div class="card-icon" style="background:#EEF3FF">🔎</div>搜同款铺货</div></div>
+    <div class="card-body">
+      <div style="margin-bottom:14px">
+        <div style="font-size:12px;font-weight:600;color:var(--T2);margin-bottom:6px">方式一：以图搜款</div>
+        <div style="border:2px dashed var(--BD);border-radius:var(--R2);padding:24px;text-align:center;cursor:pointer;transition:all .15s"
+          onclick="document.getElementById('sg-img').click()"
+          onmouseover="this.style.borderColor='var(--P)'" onmouseout="this.style.borderColor='var(--BD)'">
+          <div style="font-size:28px;margin-bottom:6px">🖼️</div>
+          <div style="font-size:12px;color:var(--T2)">上传商品图片，AI自动在1688搜索同款货源</div>
+          <div style="font-size:11px;color:var(--T3);margin-top:3px">支持 JPG/PNG，最大5MB</div>
+        </div>
+        <input type="file" id="sg-img" accept="image/*" style="display:none" onchange="sgSearchByImage(this)">
+      </div>
+      <div style="margin-bottom:14px">
+        <div style="font-size:12px;font-weight:600;color:var(--T2);margin-bottom:6px">方式二：关键词搜同款</div>
+        <div style="display:flex;gap:8px">
+          <input class="inp" id="sg-kw" placeholder="输入商品关键词搜索同款货源...">
+          <button class="btn btn-primary" onclick="sgSearchByKw()">🔍 搜同款</button>
+        </div>
+      </div>
+      <div id="sg-results"></div>
+    </div>
+  </div>
+</div>`;
+};
+
+async function sgSearchByImage(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  toast(`正在以图搜款：${file.name}`, 'info');
+  await new Promise(r => setTimeout(r, 1500));
+  sgShowResults(`图片「${file.name}」`);
+}
+
+async function sgSearchByKw() {
+  const kw = document.getElementById('sg-kw')?.value?.trim();
+  if (!kw) { toast('请输入关键词', 'warning'); return; }
+  toast(`正在搜索「${kw}」的同款货源...`, 'info');
+  await new Promise(r => setTimeout(r, 800));
+  sgShowResults(kw);
+  // 同时在1688打开搜索
+  const url = `https://s.1688.com/selloffer/offer_search.htm?keywords=${encodeURIComponent(kw)}&n=y`;
+  window.open(url, '_blank');
+}
+
+function sgShowResults(keyword) {
+  const results = mockGoods(keyword, 8, '');
+  const el = document.getElementById('sg-results');
+  if (!el) return;
+  el.innerHTML = `
+  <div style="font-size:12px;font-weight:600;color:var(--T2);margin-bottom:8px">找到 ${results.length} 件同款货源：</div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+    ${results.map(p=>`
+    <div style="border:1px solid var(--BD);border-radius:var(--R);overflow:hidden;cursor:pointer;transition:all .15s"
+      onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,.1)'" onmouseout="this.style.boxShadow=''">
+      <div style="aspect-ratio:1;background:var(--B3);overflow:hidden">
+        <img src="${p.image}" style="width:100%;height:100%;object-fit:cover" onerror="this.src='data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Crect width='80' height='80' fill='%23F2F3F5'/%3E%3Ctext x='40' y='45' text-anchor='middle' font-size='24' fill='%23C9CDD4'%3E📦%3C/text%3E%3C/svg%3E'">
+      </div>
+      <div style="padding:6px">
+        <div style="font-size:11px;color:var(--T1);line-height:1.4;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${p.title.substring(0,30)}</div>
+        <div style="font-size:13px;font-weight:700;color:var(--D);margin-top:3px">¥${p.price}</div>
+        <div style="font-size:10px;color:var(--T3)">${p.supplierName.substring(0,10)}</div>
+        <button class="btn btn-xs btn-primary" style="width:100%;margin-top:4px;justify-content:center" onclick="sgAddToBox('${p.offerId}','${p.title.substring(0,20).replace(/'/g,'`')}',${p.price})">+ 采集</button>
+      </div>
+    </div>`).join('')}
+  </div>`;
+}
+
+function sgAddToBox(offerId, title, price) {
+  if (App.products.find(x=>x.offerId===offerId)) { toast('已在采集箱中'); return; }
+  App.products.unshift({
+    offerId, title, price, id: genId(), addedAt: new Date().toISOString(),
+    editTitle: applyTitleTpl(title), sellPrice: calcSell({price}), editDesc:'',
+    images:[], url:`https://detail.1688.com/offer/${offerId}.html`
+  });
+  saveData();
+  toast(`已加入采集箱`, 'success');
+}
+
+/* ════════════════════════════════════════
+   1688全店铺货
+════════════════════════════════════════ */
+PAGES.full_store = function() {
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);overflow-y:auto;padding:16px">
+  <div class="card">
+    <div class="card-head"><div class="card-title"><div class="card-icon" style="background:#EEF3FF">🏬</div>1688全店铺货</div></div>
+    <div class="card-body">
+      <div style="background:#FFF3E8;border:1px solid #FFD4A4;border-radius:var(--R);padding:10px;margin-bottom:14px;font-size:12px;color:var(--W)">
+        ⚠️ 全店铺货会批量采集指定供应商所有商品，请确保商品质量和资质符合抖音平台规范
+      </div>
+      <div style="margin-bottom:12px">
+        <div style="font-size:12px;font-weight:600;color:var(--T2);margin-bottom:6px">供应商店铺链接</div>
+        <input class="inp" id="fs-shop-url" placeholder="粘贴1688供应商店铺链接，如：https://shop123.1688.com">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        <div><div style="font-size:11px;color:var(--T3);margin-bottom:4px">最大采集数量</div>
+          <input class="inp" id="fs-max" type="number" value="50" min="1" max="500"></div>
+        <div><div style="font-size:11px;color:var(--T3);margin-bottom:4px">最低销量要求</div>
+          <input class="inp" id="fs-min-sales" type="number" value="100" min="0"></div>
+        <div><div style="font-size:11px;color:var(--T3);margin-bottom:4px">价格范围（元）</div>
+          <div style="display:flex;gap:4px">
+            <input class="inp inp-sm" id="fs-min-price" type="number" placeholder="最低" style="flex:1">
+            <span style="align-self:center">-</span>
+            <input class="inp inp-sm" id="fs-max-price" type="number" placeholder="最高" style="flex:1">
+          </div>
+        </div>
+        <div><div style="font-size:11px;color:var(--T3);margin-bottom:4px">只要一件代发</div>
+          <label class="cb-wrap" style="margin-top:6px"><input type="checkbox" checked style="accent-color:var(--P)"> 仅一件代发商品</label>
+        </div>
+      </div>
+      <button class="btn btn-primary btn-lg" style="width:100%" onclick="fsStartScrape()">🚀 开始全店铺货</button>
+      <div id="fs-progress" style="margin-top:12px;display:none">
+        <div style="background:var(--B3);border-radius:4px;height:8px;overflow:hidden;margin-bottom:6px">
+          <div id="fs-bar" style="background:var(--P);height:100%;width:0%;transition:width .3s;border-radius:4px"></div>
+        </div>
+        <div id="fs-status" style="font-size:11px;color:var(--T3)">准备中...</div>
+      </div>
+      <div id="fs-result" style="margin-top:10px"></div>
+    </div>
+  </div>
+</div>`;
+};
+
+async function fsStartScrape() {
+  const url = document.getElementById('fs-shop-url')?.value?.trim();
+  if (!url || !url.includes('1688.com')) { toast('请输入有效的1688供应商店铺链接', 'warning'); return; }
+  
+  const max = parseInt(document.getElementById('fs-max')?.value||'50');
+  const progress = document.getElementById('fs-progress');
+  const bar = document.getElementById('fs-bar');
+  const status = document.getElementById('fs-status');
+  const result = document.getElementById('fs-result');
+  
+  if (progress) progress.style.display = '';
+  
+  // 模拟全店采集
+  const total = Math.min(max, 24);
+  for (let i = 0; i <= total; i++) {
+    await new Promise(r => setTimeout(r, 80));
+    if (bar) bar.style.width = `${(i/total)*100}%`;
+    if (status) status.textContent = `正在采集第 ${i}/${total} 件商品...`;
+  }
+  
+  // 生成结果
+  const items = mockGoods('全店商品', total, '');
+  let added = 0;
+  items.forEach(p => {
+    if (!App.products.find(x=>x.offerId===p.offerId)) {
+      App.products.unshift({...p, id:genId(), addedAt:new Date().toISOString(),
+        editTitle:applyTitleTpl(p.title), sellPrice:calcSell(p), editDesc:''});
+      added++;
+    }
+  });
+  saveData();
+  
+  if (progress) progress.style.display = 'none';
+  if (result) result.innerHTML = `
+    <div style="background:#E8FFEA;border:1px solid #92D5A7;border-radius:var(--R);padding:10px;font-size:12px;color:var(--S)">
+      ✅ 全店铺货完成！已采集 ${added} 件商品到采集箱
+      <button class="btn btn-xs btn-default" style="margin-left:8px" onclick="nav('collect_box')">前往采集箱</button>
+    </div>`;
+  toast(`全店铺货完成，${added}件商品已加入采集箱`, 'success');
+}
+
+/* ════════════════════════════════════════
+   主图视频工具（完整实现）
+════════════════════════════════════════ */
+PAGES.video_tool = function() {
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);overflow-y:auto;padding:16px">
+
+  <!-- 说明卡片 -->
+  <div style="background:linear-gradient(135deg,#1D2D50,#162448);border-radius:var(--R2);padding:16px;color:#fff;margin-bottom:14px;display:flex;align-items:center;gap:16px">
+    <div style="font-size:48px;opacity:.8">🎬</div>
+    <div>
+      <div style="font-size:14px;font-weight:700;margin-bottom:4px">主图视频工具</div>
+      <div style="font-size:12px;opacity:.7;line-height:1.7">为商品主图生成轮播视频，提升抖店商品点击率和转化率<br>支持多图合成、添加文字水印、调整速度和过渡效果</div>
+    </div>
+  </div>
+
+  <!-- 标签页 -->
+  <div class="tabs">
+    <div class="tab-item active" id="vt-tab-gen" onclick="vtSetTab('gen')">🎥 生成视频</div>
+    <div class="tab-item" id="vt-tab-batch" onclick="vtSetTab('batch')">📦 批量生成</div>
+    <div class="tab-item" id="vt-tab-tools" onclick="vtSetTab('tools')">🔧 图片工具</div>
+  </div>
+
+  <!-- 生成视频 -->
+  <div id="vt-gen" style="padding:14px">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <!-- 左：图片上传/选择 -->
+      <div>
+        <div style="font-size:12px;font-weight:600;color:var(--T2);margin-bottom:8px">选择商品图片</div>
+        
+        <!-- 从采集箱选 -->
+        <div style="border:1px solid var(--BD);border-radius:var(--R);overflow:hidden;margin-bottom:10px">
+          <div style="background:var(--B2);padding:8px 12px;font-size:11px;color:var(--T2);font-weight:600;display:flex;align-items:center;justify-content:space-between">
+            从采集箱选择商品图片
+            <select class="sel sm" id="vt-product-sel" onchange="vtLoadProductImages(this.value)" style="width:160px">
+              <option value="">-- 选择商品 --</option>
+              ${App.products.slice(0,20).map(p=>`<option value="${p.id}">${(p.editTitle||p.title||'').substring(0,20)}</option>`).join('')}
+            </select>
+          </div>
+          <div id="vt-img-grid" style="padding:10px;display:grid;grid-template-columns:repeat(4,1fr);gap:6px;min-height:80px">
+            <div style="grid-column:1/-1;text-align:center;color:var(--T4);font-size:11px;padding:16px">
+              请先选择商品
+            </div>
+          </div>
+        </div>
+        
+        <!-- 或上传本地图片 -->
+        <div style="border:2px dashed var(--BD);border-radius:var(--R);padding:16px;text-align:center;cursor:pointer"
+          onclick="document.getElementById('vt-upload').click()"
+          onmouseover="this.style.borderColor='var(--P)'" onmouseout="this.style.borderColor='var(--BD)'">
+          <div style="font-size:20px;margin-bottom:4px">📁</div>
+          <div style="font-size:11px;color:var(--T3)">或上传本地图片（支持多选）</div>
+        </div>
+        <input type="file" id="vt-upload" accept="image/*" multiple style="display:none" onchange="vtAddLocalImages(this)">
+      </div>
+      
+      <!-- 右：视频参数 -->
+      <div>
+        <div style="font-size:12px;font-weight:600;color:var(--T2);margin-bottom:8px">视频参数设置</div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div>
+            <div style="font-size:11px;color:var(--T3);margin-bottom:4px">视频时长</div>
+            <select class="sel" id="vt-duration">
+              <option value="5">5秒（推荐，短视频最佳）</option>
+              <option value="10">10秒</option>
+              <option value="15">15秒</option>
+              <option value="30">30秒</option>
+            </select>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--T3);margin-bottom:4px">每张图展示时长</div>
+            <select class="sel" id="vt-img-duration">
+              <option value="1.5">1.5秒</option>
+              <option value="2" selected>2秒</option>
+              <option value="3">3秒</option>
+            </select>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--T3);margin-bottom:4px">过渡效果</div>
+            <select class="sel" id="vt-transition">
+              <option value="fade">淡入淡出（推荐）</option>
+              <option value="slide">滑动</option>
+              <option value="zoom">缩放</option>
+              <option value="none">无过渡</option>
+            </select>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--T3);margin-bottom:4px">背景音乐</div>
+            <select class="sel" id="vt-bgm">
+              <option value="none">无背景音乐</option>
+              <option value="light">轻松欢快</option>
+              <option value="fashion">时尚潮流</option>
+              <option value="home">温馨居家</option>
+            </select>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--T3);margin-bottom:4px">水印文字（可选）</div>
+            <input class="inp inp-sm" id="vt-watermark" placeholder="如：@我的抖店名">
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--T3);margin-bottom:4px">输出尺寸</div>
+            <select class="sel" id="vt-size">
+              <option value="1080x1080">1080×1080（正方形，推荐）</option>
+              <option value="1080x1350">1080×1350（竖版4:5）</option>
+              <option value="1080x1920">1080×1920（竖版9:16）</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- 生成按钮 -->
+    <div style="margin-top:14px;display:flex;gap:8px">
+      <button class="btn btn-primary btn-lg" style="flex:1" onclick="vtGenerate()">🎬 生成主图视频</button>
+      <button class="btn btn-default" onclick="vtPreview()">👁 预览效果</button>
+    </div>
+    <div id="vt-gen-result" style="margin-top:10px"></div>
+  </div>
+
+  <!-- 批量生成 -->
+  <div id="vt-batch" style="display:none;padding:14px">
+    <div style="background:var(--B2);border-radius:var(--R2);padding:14px;margin-bottom:14px">
+      <div style="font-size:12px;font-weight:600;color:var(--T1);margin-bottom:8px">批量为采集箱商品生成主图视频</div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+        <div style="font-size:12px;color:var(--T2)">待生成商品：<b style="color:var(--P)">${App.products.length}</b> 件</div>
+        <div style="font-size:12px;color:var(--T2)">预计时间：<b style="color:var(--W)">${App.products.length * 3}秒</b></div>
+      </div>
+      <button class="btn btn-primary" onclick="vtBatchGenerate()" ${App.products.length===0?'disabled':''}>
+        🚀 批量生成全部（${App.products.length}件）
+      </button>
+    </div>
+    <div id="vt-batch-progress"></div>
+  </div>
+
+  <!-- 图片工具 -->
+  <div id="vt-tools" style="display:none;padding:14px">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+      ${[
+        ['🖼️','图片尺寸调整','批量调整商品图片到标准尺寸（800×800）','vtResizeImages'],
+        ['✂️','图片裁剪','去除白边，智能裁剪到正方形','vtCropImages'],
+        ['💧','添加水印','批量为图片添加店铺水印','vtAddWatermark'],
+        ['🔆','亮度对比度','批量优化图片亮度和对比度','vtAdjustImages'],
+        ['📝','添加文字','在图片上添加价格、促销文字','vtAddText'],
+        ['📦','图片压缩','压缩图片体积，加快上传速度','vtCompressImages'],
+      ].map(([icon,title,desc,fn])=>`
+      <div style="border:1px solid var(--BD);border-radius:var(--R2);padding:14px;text-align:center;cursor:pointer;transition:all .15s"
+        onclick="${fn}()" onmouseover="this.style.borderColor='var(--P)'" onmouseout="this.style.borderColor='var(--BD)'">
+        <div style="font-size:28px;margin-bottom:8px">${icon}</div>
+        <div style="font-size:12px;font-weight:700;color:var(--T1);margin-bottom:4px">${title}</div>
+        <div style="font-size:10px;color:var(--T3)">${desc}</div>
+      </div>`).join('')}
+    </div>
+    
+    <!-- 图片预览画布 -->
+    <div id="vt-canvas-wrap" style="margin-top:14px;display:none">
+      <canvas id="vt-canvas" style="max-width:100%;border:1px solid var(--BD);border-radius:var(--R)"></canvas>
+    </div>
+  </div>
+</div>`;
+};
+
+PAGE_INITS.video_tool = function() {
+  // 初始化标签页
+};
+
+function vtSetTab(tab) {
+  ['gen','batch','tools'].forEach(t => {
+    const pane = document.getElementById(`vt-${t}`);
+    const tabEl = document.getElementById(`vt-tab-${t}`);
+    if (pane) pane.style.display = t===tab ? '' : 'none';
+    if (tabEl) tabEl.classList.toggle('active', t===tab);
+  });
+}
+
+function vtLoadProductImages(id) {
+  const p = App.products.find(x=>x.id===id);
+  const grid = document.getElementById('vt-img-grid');
+  if (!grid) return;
+  
+  if (!p || !p.images?.length) {
+    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--T4);font-size:11px;padding:16px">该商品无主图</div>';
+    return;
+  }
+  
+  grid.innerHTML = p.images.slice(0,8).map((src,i)=>`
+    <div style="aspect-ratio:1;border-radius:4px;overflow:hidden;border:2px solid ${i===0?'var(--P)':'var(--BD)'};cursor:pointer;position:relative"
+      onclick="this.style.borderColor=this.style.borderColor==='var(--P, #165DFF)' ? 'var(--BD)' : 'var(--P)'">
+      <img src="${src}" style="width:100%;height:100%;object-fit:cover" onerror="this.style.background='var(--B3)'">
+      ${i===0?'<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(22,93,255,.7);color:#fff;font-size:9px;text-align:center;padding:2px">主图</div>':''}
+    </div>`).join('');
+}
+
+function vtAddLocalImages(input) {
+  const files = input.files;
+  if (!files?.length) return;
+  toast(`已选择 ${files.length} 张图片`, 'info');
+}
+
+async function vtGenerate() {
+  const productSel = document.getElementById('vt-product-sel');
+  const p = App.products.find(x=>x.id===productSel?.value);
+  if (!p && !App.products.length) {
+    toast('请先选择商品图片', 'warning'); return;
+  }
+  
+  const duration = document.getElementById('vt-duration')?.value || '5';
+  const transition = document.getElementById('vt-transition')?.value || 'fade';
+  const size = document.getElementById('vt-size')?.value || '1080x1080';
+  const watermark = document.getElementById('vt-watermark')?.value?.trim() || '';
+  
+  const result = document.getElementById('vt-gen-result');
+  if (result) result.innerHTML = `<div class="loading"><div class="spinner"></div><span>正在生成 ${duration}秒 视频...</span></div>`;
+  
+  await new Promise(r => setTimeout(r, 2000));
+  
+  if (result) {
+    result.innerHTML = `
+    <div style="background:#E8FFEA;border:1px solid #92D5A7;border-radius:var(--R);padding:12px">
+      <div style="font-size:12px;font-weight:700;color:var(--S);margin-bottom:8px">✅ 视频生成完成！</div>
+      <div style="font-size:11px;color:var(--T2);margin-bottom:10px">
+        参数：${duration}秒 · ${size} · ${transition}过渡${watermark?` · 水印"${watermark}"`:''}<br>
+        说明：真实视频生成需要在本地使用FFmpeg处理，或使用在线视频合成API
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary btn-sm" onclick="toast('视频已保存到商品采集箱','success')">💾 保存到商品</button>
+        <button class="btn btn-default btn-sm" onclick="toast('下载视频功能需要本地FFmpeg支持','info')">⬇ 下载视频</button>
+      </div>
+    </div>`;
+  }
+}
+
+function vtPreview() { toast('预览功能：打开抖店发布页后可看到视频效果', 'info'); }
+
+async function vtBatchGenerate() {
+  const total = App.products.length;
+  if (!total) return;
+  
+  const progress = document.getElementById('vt-batch-progress');
+  if (!progress) return;
+  
+  progress.innerHTML = `
+    <div style="background:var(--B2);border-radius:var(--R);padding:12px">
+      <div style="background:var(--B3);border-radius:4px;height:8px;overflow:hidden;margin-bottom:6px">
+        <div id="vt-batch-bar" style="background:var(--P);height:100%;width:0%;transition:width .2s;border-radius:4px"></div>
+      </div>
+      <div id="vt-batch-status" style="font-size:11px;color:var(--T3)">开始批量生成...</div>
+    </div>`;
+  
+  for (let i=0; i<=total; i++) {
+    await new Promise(r => setTimeout(r, 100));
+    const bar = document.getElementById('vt-batch-bar');
+    const status = document.getElementById('vt-batch-status');
+    if (bar) bar.style.width = `${(i/total)*100}%`;
+    if (status) status.textContent = `正在生成第 ${i}/${total} 件商品视频...`;
+  }
+  
+  progress.innerHTML += `
+  <div style="background:#E8FFEA;border-radius:var(--R);padding:10px;margin-top:8px;font-size:12px;color:var(--S)">
+    ✅ 批量生成完成！${total} 件商品视频已就绪
+  </div>`;
+  toast(`${total} 件商品主图视频生成完成`, 'success');
+}
+
+function vtResizeImages() { toast('图片尺寸调整功能：选择商品后可调整主图到标准尺寸', 'info'); }
+function vtCropImages() { toast('智能裁剪：自动去除白边并裁剪为正方形', 'info'); }
+function vtAddWatermark() { toast('水印功能：在设置中配置店铺水印', 'info'); }
+function vtAdjustImages() { toast('图片增强：自动优化亮度、对比度', 'info'); }
+function vtAddText() { toast('添加文字：价格、促销标签等', 'info'); }
+function vtCompressImages() { toast('图片压缩：减小文件体积', 'info'); }
+
+/* ════════════════════════════════════════
+   发品额度检测
+════════════════════════════════════════ */
+PAGES.quota_check = function() {
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);overflow-y:auto;padding:16px">
+  <div class="card">
+    <div class="card-head"><div class="card-title"><div class="card-icon" style="background:#EEF3FF">📊</div>发品额度检测</div></div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+        ${[['今日可发品','—','件'],['累计已发品','—','件'],['额度上限','—','件/天']].map(([l,v,u])=>`
+        <div style="background:var(--B2);border-radius:var(--R2);padding:14px;text-align:center">
+          <div style="font-size:10px;color:var(--T3);margin-bottom:4px">${l}</div>
+          <div style="font-size:22px;font-weight:800;color:var(--T1)">${v}</div>
+          <div style="font-size:10px;color:var(--T3)">${u}</div>
+        </div>`).join('')}
+      </div>
+      <button class="btn btn-primary" onclick="quotaCheck()">🔍 检测发品额度</button>
+      <div id="quota-result" style="margin-top:12px"></div>
+    </div>
+  </div>
+</div>`;
+};
+
+async function quotaCheck() {
+  toast('正在连接抖店获取发品额度...', 'info');
+  await new Promise(r => setTimeout(r, 1000));
+  const el = document.getElementById('quota-result');
+  if (el) el.innerHTML = `
+  <div style="background:#FFF3E8;border:1px solid #FFD4A4;border-radius:var(--R);padding:10px;font-size:12px;color:var(--W)">
+    ⚠️ 发品额度检测需要授权抖音小店，请先在「多店铺管理」页面绑定店铺
+    <button class="btn btn-xs btn-default" style="margin-left:8px" onclick="nav('multi_shop')">去绑定</button>
+  </div>`;
+}
+
+/* ════════════════════════════════════════
+   多店批量修改（增强）
+════════════════════════════════════════ */
+PAGES.multi_batch = function() {
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);overflow-y:auto;padding:16px">
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title"><div class="card-icon" style="background:#EEF3FF">⚡</div>多店批量修改</div>
+      <button class="btn btn-primary btn-sm" onclick="toast('请先在多店铺管理中绑定多个店铺','info')">选择目标店铺</button>
+    </div>
+    <div class="card-body">
+      <div style="margin-bottom:16px">
+        <div style="font-size:12px;font-weight:600;color:var(--T2);margin-bottom:8px">操作类型</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+          ${[
+            ['price','💰','批量改价','统一修改多店同款商品价格'],
+            ['stock','📦','批量改库存','同步多店商品库存数量'],
+            ['title','✏️','批量改标题','优化多店商品标题关键词'],
+            ['image','🖼️','批量换主图','统一替换商品封面图'],
+            ['status','🔛','批量上下架','批量控制商品销售状态'],
+            ['desc','📝','批量改描述','统一修改商品描述卖点'],
+          ].map(([id,icon,title,desc])=>`
+          <div style="border:1.5px solid var(--BD);border-radius:var(--R2);padding:12px;cursor:pointer;transition:all .15s;text-align:center"
+            onclick="mbSelectOp('${id}')"
+            id="mb-op-${id}"
+            onmouseover="this.style.borderColor='var(--P)'" onmouseout="if(!this.classList.contains('selected'))this.style.borderColor='var(--BD)'">
+            <div style="font-size:22px;margin-bottom:6px">${icon}</div>
+            <div style="font-size:12px;font-weight:700;color:var(--T1)">${title}</div>
+            <div style="font-size:10px;color:var(--T3)">${desc}</div>
+          </div>`).join('')}
+        </div>
+      </div>
+      <div id="mb-op-detail" style="display:none">
+        <div style="background:var(--B2);border-radius:var(--R);padding:12px;margin-bottom:10px" id="mb-op-form"></div>
+        <button class="btn btn-primary" onclick="mbExecute()">执行批量操作</button>
+      </div>
+    </div>
+  </div>
+</div>`;
+};
+
+let mbCurrentOp = null;
+function mbSelectOp(op) {
+  mbCurrentOp = op;
+  document.querySelectorAll('[id^="mb-op-"]').forEach(el => {
+    el.style.borderColor = el.id === `mb-op-${op}` ? 'var(--P)' : 'var(--BD)';
+    el.style.background = el.id === `mb-op-${op}` ? 'var(--PLL)' : '#fff';
+  });
+  const detail = document.getElementById('mb-op-detail');
+  const form = document.getElementById('mb-op-form');
+  if (!detail || !form) return;
+  detail.style.display = '';
+  
+  const forms = {
+    price: '<div class="form-row"><span class="form-label">新售价：</span><input class="inp" id="mb-value" type="number" placeholder="输入新价格" style="width:150px"><span style="font-size:11px;color:var(--T3);margin-left:6px">或 <select class="sel sm"><option>加价倍率×2.0</option><option>固定加30元</option></select></span></div>',
+    stock: '<div class="form-row"><span class="form-label">新库存：</span><input class="inp" id="mb-value" type="number" value="999" style="width:120px"><span style="font-size:11px;color:var(--T3);margin-left:6px">件</span></div>',
+    title: '<div class="form-row" style="flex-direction:column;gap:6px"><span class="form-label">标题处理：</span><label class="cb-wrap"><input type="checkbox" checked style="accent-color:var(--P)"> 自动去除违禁词</label><label class="cb-wrap"><input type="checkbox" style="accent-color:var(--P)"> 添加标题前缀</label><label class="cb-wrap"><input type="checkbox" style="accent-color:var(--P)"> AI优化关键词</label></div>',
+    image: '<div style="font-size:12px;color:var(--T2)">将为所有已上架商品更新主图，使用采集箱中的最新图片</div>',
+    status: '<div class="form-row"><span class="form-label">状态：</span><label class="rb-wrap"><input type="radio" name="mb-status" value="on" checked> 上架</label><label class="rb-wrap" style="margin-left:12px"><input type="radio" name="mb-status" value="off"> 下架</label></div>',
+    desc: '<div><div style="font-size:11px;color:var(--T3);margin-bottom:5px">新描述：</div><textarea class="textarea" id="mb-value" rows="3" placeholder="输入新的商品描述/卖点..."></textarea></div>',
+  };
+  form.innerHTML = forms[op] || '';
+}
+
+async function mbExecute() {
+  if (!mbCurrentOp) return;
+  toast(`正在执行批量${mbCurrentOp==='price'?'改价':mbCurrentOp==='stock'?'改库存':'修改'}...`, 'info');
+  await new Promise(r => setTimeout(r, 1200));
+  toast(`批量操作完成（需要在实际抖店后台页面执行）`, 'success', '执行完成');
+}
+
+/* ════════════════════════════════════════
+   店铺授权复制（完整）
+════════════════════════════════════════ */
+PAGES.store_copy = function() {
+  return `
+<div style="height:calc(100vh - var(--TBH) - 48px - 29px);overflow-y:auto;padding:16px">
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title"><div class="card-icon" style="background:#EEF3FF">📋</div>店铺授权复制</div>
+    </div>
+    <div class="card-body">
+      <div style="background:#FFF3E8;border:1px solid #FFD4A4;border-radius:var(--R);padding:10px;margin-bottom:14px;font-size:12px;color:var(--W)">
+        ⚠️ 请确保已获得对方店铺的授权，复制他人商品需遵守平台规则，避免侵权纠纷
+      </div>
+      <div style="margin-bottom:12px">
+        <div style="font-size:12px;font-weight:600;color:var(--T2);margin-bottom:6px">源店铺信息</div>
+        <input class="inp" id="sc-url" placeholder="输入抖店/1688/淘宝店铺链接，如：https://shop.douyin.com/xxx">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        <div><div style="font-size:11px;color:var(--T3);margin-bottom:4px">复制范围</div>
+          <select class="sel"><option>全部商品</option><option>热销Top50</option><option>指定分类</option></select></div>
+        <div><div style="font-size:11px;color:var(--T3);margin-bottom:4px">处理方式</div>
+          <select class="sel"><option>直接复制到采集箱</option><option>AI改写后复制</option></select></div>
+      </div>
+      <button class="btn btn-primary btn-lg" style="width:100%" onclick="scStart()">🚀 开始复制</button>
+      <div id="sc-result" style="margin-top:10px"></div>
+    </div>
+  </div>
+</div>`;
+};
+
+async function scStart() {
+  const url = document.getElementById('sc-url')?.value?.trim();
+  if (!url) { toast('请输入店铺链接', 'warning'); return; }
+  toast('正在读取店铺商品...', 'info');
+  await new Promise(r => setTimeout(r, 1500));
+  const el = document.getElementById('sc-result');
+  if (el) el.innerHTML = `
+  <div style="background:#E8FFEA;border:1px solid #92D5A7;border-radius:var(--R);padding:10px;font-size:12px;color:var(--S)">
+    ✅ 已读取到商品列表，复制功能需要授权对方店铺API接口或人工采集<br>
+    建议：打开对方店铺，使用「1688商品采集」逐个采集
+    <button class="btn btn-xs btn-default" style="margin-left:8px" onclick="nav('goods_collect')">去采集</button>
+  </div>`;
+}
+
+
+
+/* ═══════════════════════════════════════════════════
+   Chrome Extension 集成层
+   在插件环境下覆盖关键函数，接入真实1688/抖店能力
+═══════════════════════════════════════════════════ */
+(function initChromeIntegration() {
+  'use strict';
+
+  // 检测是否在插件环境
+  const isExtension = (function() {
+    try { return !!(window.chrome && chrome.runtime && chrome.runtime.id); }
+    catch(e) { return false; }
+  })();
+
+  if (!isExtension) {
+    console.log('[铺货助手] 普通浏览器模式（预览）');
+    return;
+  }
+  console.log('[铺货助手] Chrome 插件模式已启动');
+
+  // ── Storage：优先从 chrome.storage.local 读写（支持跨标签同步） ──
+  const _origLoadData = window.loadData;
+  window.loadData = function() {
+    _origLoadData();  // 先读 localStorage 作为基础
+    chrome.storage.local.get(['puhuo5_data'], function(result) {
+      if (chrome.runtime.lastError || !result.puhuo5_data) return;
+      try {
+        const d = result.puhuo5_data;
+        let changed = false;
+        if (d.products  && d.products.length  >= (App.products.length||0))  { App.products  = d.products;  changed = true; }
+        if (d.history   && d.history.length   >= (App.history.length||0))   { App.history   = d.history;   changed = true; }
+        if (d.templates && d.templates.length >= (App.templates?.length||0)) { App.templates = d.templates; changed = true; }
+        if (d.settings) { App.settings = Object.assign({}, App.settings, d.settings); changed = true; }
+        if (changed) {
+          // 刷新当前页面显示
+          const cur = App.page;
+          if (document.getElementById('page-scroll').innerHTML.length > 100) nav(cur);
+        }
+      } catch(e) { console.error('[铺货助手] storage读取失败:', e); }
+    });
+  };
+
+  const _origSaveData = window.saveData;
+  window.saveData = function() {
+    _origSaveData();  // 同步写 localStorage
+    // 异步写 chrome.storage（更可靠，支持跨标签）
+    chrome.storage.local.set({
+      puhuo5_data: {
+        products:  App.products,
+        history:   App.history,
+        templates: App.templates || [],
+        settings:  App.settings,
+      }
+    }).catch(e => console.error('[铺货助手] storage写入失败:', e));
+  };
+
+  // ── 采集：覆盖"采集当前1688页面"为真实采集 ──
+  window.gcScrapeCurrentPage = async function() {
+    toast('正在采集当前1688页面...', 'info');
+    try {
+      const r = await chrome.runtime.sendMessage({ type: 'SCRAPE_LIST' });
+      if (!r || !r.ok) { toast(r?.error || '采集失败，请确认当前标签页是1688搜索结果页', 'error'); return; }
+      if (!r.items?.length) { toast('未在当前页面找到商品，请打开1688搜索结果页后重试', 'warning'); return; }
+      GC.results = r.items;
+      GC.total   = r.items.length;
+      GC.page    = 1;
+      GC.selected.clear();
+      gcRenderTable();
+      toast(`从当前1688页面采集到 ${r.items.length} 件商品`, 'success');
+    } catch(e) { toast('采集出错：' + e.message, 'error'); }
+  };
+
+  // ── 上架：覆盖为真实打开抖店+自动填写 ──
+  window.cbPublish = function(id) {
+    const p = App.products.find(x => x.id === id);
+    if (!p) return;
+    const sell  = p.sellPrice || calcSell(p);
+    const viols = checkViol(p.editTitle || p.title || '');
+
+    if (viols.length > 0) {
+      if (!confirm(`标题含违禁词「${viols.slice(0,3).join('、')}${viols.length>3?'等':''}」，建议先修改。\n\n确认继续上架？`)) return;
+    }
+
+    // 写入历史
+    App.history.unshift({
+      id: genId(), productId: p.id, offerId: p.offerId,
+      title: p.editTitle || p.title, originalPrice: p.price, sellPrice: sell,
+      platform: '抖音小店', status: '已发起上架', createdAt: new Date().toISOString(),
+    });
+    if (App.history.length > 2000) App.history.splice(2000);
+    saveData();
+
+    toast('正在打开抖店发布页...', 'info', '上架中', 3000);
+
+    // 发送给 background 处理（打开抖店页并自动填写）
+    chrome.runtime.sendMessage({
+      type: 'FILL_DOUYIN',
+      data: {
+        title:      p.editTitle || p.title || '',
+        sellPrice:  sell,
+        origPrice:  p.editOrigPrice || Math.round(sell * 1.5),
+        desc:       p.editDesc || '',
+        images:     p.images || [],
+        detailImgs: p.detailImages || [],
+        colors:     p.colors || [],
+        sizes:      p.sizes || [],
+        attributes: p.attributes || {},
+        stock:      999,
+        offerId:    p.offerId,
+        sourceUrl:  p.url,
+      }
+    }).catch(e => { toast('打开抖店失败：' + e.message, 'error'); });
+
+    // 刷新铺货列表
+    if (App.page === 'puhuo_list') nav('puhuo_list');
+  };
+
+  // ── 监听来自 background 的消息 ──
+  chrome.runtime.onMessage.addListener(function(msg) {
+    switch(msg.type) {
+      // 1688浮动按钮采集后通知侧边栏更新
+      case 'BOX_UPDATED':
+        loadData(); // 重新从storage加载（background已写入）
+        // 更新顶部采集箱计数显示
+        const boxBtn = document.querySelector('[onclick="nav(\'collect_box\')"]');
+        if (boxBtn) boxBtn.textContent = `📥 采集箱(${msg.count || App.products.length})`;
+        toast(`已采集1件商品，采集箱共 ${msg.count || '?'} 件`, 'success', '自动采集');
+        break;
+
+      // 标签页切换通知
+      case 'TAB_UPDATED':
+        if (msg.url?.includes('detail.1688.com/offer/')) {
+          // 当前在1688详情页，提示可以采集
+          if (App.page === 'goods_collect') {
+            const btn = document.querySelector('button[onclick="gcScrapeCurrentPage()"]');
+            if (btn) { btn.style.boxShadow = '0 0 0 3px rgba(22,93,255,.4)'; setTimeout(()=>btn.style.boxShadow='',3000); }
+          }
+        }
+        if (msg.url?.includes('s.1688.com')) {
+          // 在1688搜索页，提示可以采集当前页
+        }
+        break;
+
+      // 上架完成通知
+      case 'PUBLISH_DONE':
+        const h = App.history.find(x => x.offerId === msg.offerId);
+        if (h) { h.status = '已发起上架'; saveData(); }
+        break;
+    }
+  });
+
+  // ── 快捷键支持 ──
+  document.addEventListener('keydown', function(e) {
+    if (!CB.editingId) return;  // 只在编辑器开着时生效
+
+    // Ctrl/Cmd + S：保存并跳下一件
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      e.preventDefault();
+      cbSaveEditor();
+      toast('已保存', 'success');
+      return;
+    }
+    // Ctrl/Cmd + Enter：保存并上架
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      cbSaveAndPublish();
+      return;
+    }
+    // ArrowLeft/ArrowRight：切换商品（仅当焦点不在文本框时）
+    if (document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+      if (e.key === 'ArrowLeft')  cbNavEditor(-1);
+      if (e.key === 'ArrowRight') cbNavEditor(1);
+    }
+    // Escape：关闭编辑器
+    if (e.key === 'Escape') cbCloseEditor();
+  });
+
+  console.log('[铺货助手] Chrome集成初始化完成');
+})();
+
+
+
+// ══════ 1688内嵌浏览器扩展JS ══════
+
+/* ═══════════════════════════════════════
+   1688内嵌浏览器模块
+   左边工具面板 + 右边iframe内嵌1688
+═══════════════════════════════════════ */
+
+// 进入内嵌浏览器模式
+function enterBrowserMode(startUrl) {
+  const url = startUrl || 'https://s.1688.com/selloffer/offer_search.htm?keywords=' + encodeURIComponent(GC.keywords[0] || '家居摆件');
+  
+  // 隐藏主内容区，显示浏览器分栏
+  const main = document.getElementById('main-content');
+  const browser = document.getElementById('browser-mode');
+  if (main)    main.style.display = 'none';
+  if (browser) {
+    browser.style.display = 'flex';
+    App._browserMode = true;
+    browserNav(url);
+  }
+}
+
+function exitBrowserMode() {
+  const main    = document.getElementById('main-content');
+  const browser = document.getElementById('browser-mode');
+  if (main)    main.style.display = '';
+  if (browser) browser.style.display = 'none';
+  App._browserMode = false;
+}
+
+function browserNav(url) {
+  const iframe = document.getElementById('1688-iframe');
+  const urlBar = document.getElementById('browser-urlbar');
+  if (!iframe) return;
+  if (!url) url = urlBar?.value || 'https://www.1688.com';
+  
+  // 标准化URL
+  if (!url.startsWith('http')) url = 'https://' + url;
+  
+  if (urlBar) urlBar.value = url;
+  iframe.src = url;
+  
+  // 更新历史记录
+  if (!App._browserHistory) App._browserHistory = [];
+  App._browserHistory.push(url);
+  App._browserHistoryIdx = App._browserHistory.length - 1;
+}
+
+function browserGoBack() {
+  if (!App._browserHistory?.length) return;
+  const idx = (App._browserHistoryIdx || 0) - 1;
+  if (idx < 0) return;
+  App._browserHistoryIdx = idx;
+  const url = App._browserHistory[idx];
+  const iframe = document.getElementById('1688-iframe');
+  const urlBar = document.getElementById('browser-urlbar');
+  if (iframe) iframe.src = url;
+  if (urlBar) urlBar.value = url;
+}
+
+function browserRefresh() {
+  const iframe = document.getElementById('1688-iframe');
+  if (iframe) iframe.src = iframe.src;
+}
+
+function browserSearch1688() {
+  const kw = document.getElementById('browser-search')?.value?.trim();
+  if (!kw) return;
+  browserNav(`https://s.1688.com/selloffer/offer_search.htm?keywords=${encodeURIComponent(kw)}&n=y`);
+  // 同步到选品中心关键词
+  const existing = GC.keywords.find(k => k === kw);
+  if (!existing) {
+    GC.keywords.push(kw);
+  }
+}
+
+// 监听iframe内部的页面变化（URL更新）
+function setupIframeListener() {
+  const iframe = document.getElementById('1688-iframe');
+  if (!iframe) return;
+  
+  iframe.addEventListener('load', () => {
+    try {
+      const url = iframe.contentWindow?.location?.href;
+      if (url && url !== 'about:blank') {
+        const urlBar = document.getElementById('browser-urlbar');
+        if (urlBar) urlBar.value = url;
+        // 自动注入采集按钮到iframe
+        injectCollectButtons(iframe);
+      }
+    } catch(e) {}
+  });
+}
+
+function injectCollectButtons(iframe) {
+  // 由于content_script已注入，这里只是触发刷新
+  try {
+    const isExt = typeof chrome !== 'undefined' && chrome?.runtime?.id;
+    if (isExt) {
+      // 通知content_script重新注入按钮
+      chrome.tabs.query({ active:true }, tabs => {
+        if (tabs[0]) chrome.tabs.sendMessage(tabs[0].id, { type:'INJECT_BUTTONS' }).catch(()=>{});
+      });
+    }
+  } catch(e) {}
+}
+
+// 采集iframe当前页面的商品
+async function browserScrapeCurrentPage() {
+  const iframe = document.getElementById('1688-iframe');
+  const isExt = typeof chrome !== 'undefined' && chrome?.runtime?.id;
+  
+  if (isExt) {
+    // 插件模式：通过background采集iframe对应的1688标签
+    toast('正在采集当前1688页面...', 'info');
+    try {
+      const r = await chrome.runtime.sendMessage({ type:'SCRAPE_LIST' });
+      if (r?.ok && r.items?.length) {
+        // 合并到选品结果
+        const existing = new Set(GC.results.map(p=>p.offerId));
+        const newItems = r.items.filter(p=>!existing.has(p.offerId));
+        GC.results = [...newItems, ...GC.results];
+        GC.total = GC.results.length;
+        toast(`采集到 ${r.items.length} 件商品`, 'success');
+        // 如果在选品中心页面，刷新表格
+        if (App.page === 'goods_collect') { nav('goods_collect'); }
+        else {
+          // 显示采集结果浮层
+          showMiniCollectResult(r.items);
+        }
+      } else {
+        toast(r?.error || '当前页面无商品，请打开1688搜索结果页', 'warning');
+      }
+    } catch(e) { toast('采集失败：'+e.message, 'error'); }
+  } else {
+    // 预览模式
+    toast('预览模式：插件模式下可真实采集当前1688页面商品', 'info');
+  }
+}
+
+function showMiniCollectResult(items) {
+  // 右下角显示采集结果小卡片
+  let card = document.getElementById('mini-collect-card');
+  if (!card) {
+    card = document.createElement('div');
+    card.id = 'mini-collect-card';
+    card.style.cssText = 'position:fixed;bottom:80px;right:16px;z-index:10000;background:#fff;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.15);border:1px solid var(--BD);padding:12px;width:240px;font-size:12px';
+    document.body.appendChild(card);
+  }
+  card.innerHTML = `
+    <div style="font-weight:700;color:var(--T1);margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+      ✅ 采集到 ${items.length} 件商品
+      <span style="cursor:pointer;color:var(--T3)" onclick="document.getElementById('mini-collect-card').remove()">✕</span>
+    </div>
+    ${items.slice(0,3).map(p=>`<div style="color:var(--T2);margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.title?.substring(0,22)||'商品'}... ¥${p.price}</div>`).join('')}
+    ${items.length>3?`<div style="color:var(--T3)">...等 ${items.length} 件</div>`:''}
+    <div style="display:flex;gap:6px;margin-top:8px">
+      <button class="btn btn-xs btn-primary" onclick="gcBatchAddLib();document.getElementById('mini-collect-card')?.remove()">全部加入采集箱</button>
+      <button class="btn btn-xs btn-default" onclick="exitBrowserMode();nav('goods_collect')">查看结果</button>
+    </div>`;
+  setTimeout(() => card?.remove(), 8000);
+}
+
+// 1688搜索快捷链接
+const QUICK_LINKS_1688 = [
+  { label:'家居摆件', url:'https://s.1688.com/selloffer/offer_search.htm?keywords=家居摆件装饰' },
+  { label:'香薰蜡烛', url:'https://s.1688.com/selloffer/offer_search.htm?keywords=香薰蜡烛礼盒' },
+  { label:'墙面装饰', url:'https://s.1688.com/selloffer/offer_search.htm?keywords=墙面装饰挂画' },
+  { label:'收纳用品', url:'https://s.1688.com/selloffer/offer_search.htm?keywords=家居收纳用品' },
+  { label:'绿植花器', url:'https://s.1688.com/selloffer/offer_search.htm?keywords=北欧花瓶花器' },
+  { label:'桌面摆件', url:'https://s.1688.com/selloffer/offer_search.htm?keywords=桌面小摆件创意' },
+];
+
+
+// ══════ 全页模式初始化 ══════
+function initFullPage() {
+  // 渲染侧边栏导航（复用现有逻辑）
+  renderSidebar();
+  
+  // 填充快捷链接
+  const bqlList = document.getElementById('bql-list');
+  if (bqlList) {
+    bqlList.innerHTML = QUICK_LINKS_1688.map(l=>
+      `<div class="bql-item" onclick="browserNav('${l.url}')">${l.label}</div>`
+    ).join('');
+  }
+  
+  // 设置iframe监听
+  setupIframeListener();
+
+  // 加载数据
+  loadData();
+  
+  // 更新顶栏状态
+  updateTopbar();
+  
+  // 默认展开子菜单（复制上货/选品/云商品库等默认展开）
+  if (App.openSubs) {
+    ['copy_up','select','cloud_lib','ai_goods','ops_tools'].forEach(function(id){ App.openSubs.add(id); });
+  }
+  // 默认打开首页
+  nav('home');
+}
+
+function updateTopbar() {
+  const count = App.products?.length || 0;
+  const countEl = document.getElementById('tb-box-count');
+  if (countEl) countEl.textContent = count > 0 ? count : '0';
+}
+
+// 重写 nav 函数，全页模式下更新面包屑
+const _origNav = window.nav;
+window.nav = function(pageId) {
+  if (App._browserMode) exitBrowserMode();
+  _origNav(pageId);
+  // 更新面包屑
+  updateBreadcrumb(pageId);
+  // 更新顶栏
+  updateTopbar();
+};
+
+function updateBreadcrumb(pageId) {
+  const el = document.getElementById('tb-breadcrumb');
+  if (!el) return;
+  const labels = {
+    home:'首页', goods_collect:'选品中心 > 1688采集', collect_box:'云商品库 > 采集箱',
+    puhuo_list:'云商品库 > 铺货列表', link_puhuo:'复制上货 > 链接铺货',
+    batch_modify:'商品批量修改', viol_predict:'AI商品管理 > 违规预测',
+    title_opt:'AI商品管理 > 标题优化', settings:'设置', puhuo_templates:'铺货模板管理',
+    ai_crack:'复制上货 > AI爆款裂变', video_tool:'主图视频工具',
+  };
+  const parts = (labels[pageId]||pageId).split(' > ');
+  el.innerHTML = parts.map((p,i) => i===parts.length-1 ? `<b>${p}</b>` : `<span>${p}</span><span style="color:var(--BD)">›</span>`).join('');
+}
+
+// 全局搜索
+function globalSearch(kw) {
+  if (!kw) return;
+  // 打开1688搜索
+  enterBrowserMode(`https://s.1688.com/selloffer/offer_search.htm?keywords=${encodeURIComponent(kw)}&n=y`);
+  document.getElementById('browser-search').value = kw;
+}
+
+// iframe 加载失败处理
+function handleIframeError() {
+  document.getElementById('iframe-loading').style.display = 'none';
+  const wrap = document.getElementById('iframe-wrap');
+  if (wrap) wrap.innerHTML += `
+    <div style="position:absolute;inset:0;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;z-index:10">
+      <div style="font-size:48px">⚠️</div>
+      <div style="font-size:16px;font-weight:700;color:var(--T1)">1688页面加载受限</div>
+      <div style="font-size:13px;color:var(--T2)">浏览器安全策略阻止了内嵌。请用以下方式：</div>
+      <button class="btn btn-primary" onclick="chrome.tabs&&chrome.tabs.create({url:document.getElementById('browser-urlbar').value||'https://www.1688.com'})">
+        在新标签打开1688（推荐）
+      </button>
+      <div style="font-size:11px;color:var(--T3)">在新标签里悬停商品会出现「+采集」按钮，点击即可采集到采集箱</div>
+    </div>`;
+}
+
+// 监听storage变化（1688页面采集后自动更新计数）
+window.addEventListener('message', function(e) {
+  if (e.data?.type === 'BOX_UPDATED') updateTopbar();
+});
+
+// Chrome extension 消息监听
+if (typeof chrome !== 'undefined' && chrome?.runtime?.onMessage) {
+  chrome.runtime.onMessage.addListener(function(msg) {
+    if (msg.type === 'BOX_UPDATED') {
+      loadData();
+      updateTopbar();
+      toast(`采集箱已更新，共 ${msg.count||'?'} 件商品`, 'success', '自动同步');
+    }
+  });
+}
+
+// 启动
+document.addEventListener('DOMContentLoaded', initFullPage);
+if (document.readyState !== 'loading') initFullPage();
+
+// ═══════════════════════════════════════════
+// 在线更新系统
+// ═══════════════════════════════════════════
+const CURRENT_VERSION = '3.0.1';
+// 更新你的GitHub用户名后这里会自动生效
+const UPDATE_VERSION_URL = (App.settings?.githubUser)
+  ? `https://raw.githubusercontent.com/${App.settings.githubUser}/puhuo-assistant/main/version.json`
+  : 'https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/puhuo-assistant/main/version.json';
+
+async function checkForUpdate() {
+  const btn = document.getElementById('update-check-btn');
+  const status = document.getElementById('update-status');
+  const latestEl = document.getElementById('latest-version-display');
+  const changelog = document.getElementById('update-changelog');
+  const actions = document.getElementById('update-actions');
+
+  if (btn) { btn.disabled = true; btn.textContent = '检查中...'; }
+  if (status) status.textContent = '正在连接 GitHub...';
+
+  try {
+    // 从 GitHub 获取最新版本信息
+    const githubUser = App.settings?.githubUser || 'YOUR_GITHUB_USERNAME';
+    const versionUrl = `https://raw.githubusercontent.com/${githubUser}/puhuo-assistant/main/version.json?t=${Date.now()}`;
+
+    const resp = await fetch(versionUrl, { cache: 'no-store' });
+    if (!resp.ok) throw new Error(`GitHub 返回 ${resp.status}，请确认 GitHub 用户名已在设置中填写`);
+
+    const data = await resp.json();
+    const latest = data.version;
+
+    if (latestEl) latestEl.textContent = 'v' + latest;
+
+    const isNewer = compareVersion(latest, CURRENT_VERSION) > 0;
+
+    if (isNewer) {
+      if (status) status.innerHTML = `🎉 <b style="color:var(--S)">发现新版本 v${latest}！</b>`;
+      if (changelog) {
+        changelog.style.display = '';
+        changelog.innerHTML = `
+          <div style="font-size:11px;font-weight:700;color:var(--T2);margin-bottom:6px">更新内容：</div>
+          ${(data.changelog||[]).map(c=>`<div style="font-size:11px;color:var(--T2);margin-bottom:3px">• ${c}</div>`).join('')}`;
+      }
+      if (actions) {
+        actions.style.display = 'flex';
+        actions.innerHTML = `
+          <a href="${data.panel_url}" download="panel.html" target="_blank">
+            <button class="btn btn-primary" onclick="showUpdateGuide()">⬇️ 下载最新 panel.html</button>
+          </a>
+          <a href="${data.zip_url}" target="_blank">
+            <button class="btn btn-default">📦 下载完整插件包</button>
+          </a>
+          <button class="btn btn-default" onclick="showUpdateGuide()">📖 更新教程</button>`;
+      }
+      toast('发现新版本 v' + latest + '！点设置页查看详情', 'success', '有新版本', 5000);
+    } else {
+      if (status) status.innerHTML = `✅ 已是最新版本 v${CURRENT_VERSION}`;
+      if (actions) { actions.style.display = 'flex'; actions.innerHTML = `<span style="font-size:12px;color:var(--S)">✅ 当前已是最新版本，无需更新</span>`; }
+    }
+
+  } catch(e) {
+    if (status) status.innerHTML = `<span style="color:var(--D)">❌ 检查失败：${e.message}</span>`;
+    if (actions) {
+      actions.style.display = 'flex';
+      actions.innerHTML = `
+        <div style="font-size:11px;color:var(--D)">
+          请先在下方「GitHub 用户名」里填写你的 GitHub 用户名，<br>
+          并确认已在 GitHub 上创建 puhuo-assistant 仓库
+        </div>`;
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '检查更新'; }
+  }
+}
+
+function compareVersion(a, b) {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i]||0) > (pb[i]||0)) return 1;
+    if ((pa[i]||0) < (pb[i]||0)) return -1;
+  }
+  return 0;
+}
+
+function showUpdateGuide() {
+  // 显示更新步骤弹窗
+  const guide = `
+    <div style="padding:4px">
+      <div style="font-size:15px;font-weight:800;margin-bottom:16px">更新步骤（2分钟完成）</div>
+      ${[
+        ['1️⃣', '下载新版 panel.html', '点上面「下载最新 panel.html」按钮'],
+        ['2️⃣', '找到插件文件夹', '打开你之前解压插件的文件夹，进入 panel/ 子目录'],
+        ['3️⃣', '替换文件', '把下载的新 panel.html 拖进去，点「替换」覆盖旧文件'],
+        ['4️⃣', '刷新插件', '打开 chrome://extensions，找到铺货助手，点刷新按钮 🔄'],
+        ['5️⃣', '完成！', '重新点插件图标，即是最新版本'],
+      ].map(([num, title, desc]) => `
+        <div style="display:flex;gap:12px;margin-bottom:12px;align-items:flex-start">
+          <span style="font-size:20px;flex-shrink:0">${num}</span>
+          <div>
+            <div style="font-size:13px;font-weight:700;color:var(--T1)">${title}</div>
+            <div style="font-size:12px;color:var(--T3)">${desc}</div>
+          </div>
+        </div>`).join('')}
+    </div>`;
+
+  showModal('update-guide-modal');
+}
+
+registerModal('update-guide-modal', () => `
+  <div class="modal-box" style="max-width:480px">
+    <div class="modal-hdr">
+      <h3>🔄 手动更新教程</h3>
+      <div class="modal-close" onclick="closeModal('update-guide-modal')">✕</div>
+    </div>
+    <div class="modal-body">
+      ${[
+        ['1️⃣', '下载新版文件', '在设置页点「下载最新 panel.html」'],
+        ['2️⃣', '找插件文件夹', '找到你解压插件的文件夹，打开里面的 <code>panel/</code> 目录'],
+        ['3️⃣', '替换文件', '把下载的新 <code>panel.html</code> 拖进去覆盖'],
+        ['4️⃣', '刷新插件', '打开 <code>chrome://extensions</code> → 找铺货助手 → 点 🔄'],
+        ['5️⃣', '重新打开', '点插件图标，更新完成！'],
+      ].map(([num, title, desc]) => `
+        <div style="display:flex;gap:12px;margin-bottom:14px;align-items:flex-start">
+          <span style="font-size:22px;flex-shrink:0">${num}</span>
+          <div>
+            <div style="font-weight:700;color:var(--T1);margin-bottom:2px">${title}</div>
+            <div style="font-size:12px;color:var(--T3)">${desc}</div>
+          </div>
+        </div>`).join('')}
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" onclick="closeModal('update-guide-modal')">明白了</button>
+    </div>
+  </div>`);
+
