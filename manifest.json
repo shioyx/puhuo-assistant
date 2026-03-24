@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
   "name": "1688铺货助手Pro",
-  "version": "3.0.2",
-  "description": "1688采集→编辑→违禁词检测→一键铺货抖音小店，独立页面全流程工具",
+  "version": "3.0.3",
+  "description": "1688采集→编辑→违禁词检测→一键铺货抖音小店",
   "icons": {
-    "16":  "icons/icon16.png",
-    "48":  "icons/icon48.png",
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
   "permissions": [
@@ -18,8 +18,7 @@
   ],
   "host_permissions": [
     "https://*.1688.com/*",
-    "https://fxg.jinritemai.com/*",
-    "https://detail.m.1688.com/*"
+    "https://fxg.jinritemai.com/*"
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self' 'unsafe-inline'; img-src * data: blob:"
@@ -34,13 +33,19 @@
         "https://s.1688.com/*",
         "https://*.1688.com/*"
       ],
-      "js": ["content_1688.js"],
+      "js": [
+        "content_1688.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     },
     {
-      "matches": ["https://fxg.jinritemai.com/*"],
-      "js": ["content_douyin.js"],
+      "matches": [
+        "https://fxg.jinritemai.com/*"
+      ],
+      "js": [
+        "content_douyin.js"
+      ],
       "run_at": "document_idle"
     }
   ],
@@ -56,15 +61,20 @@
   "action": {
     "default_title": "打开1688铺货助手",
     "default_icon": {
-      "16":  "icons/icon16.png",
-      "48":  "icons/icon48.png",
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     }
   },
   "web_accessible_resources": [
     {
-      "resources": ["panel/*", "icons/*"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "panel/*",
+        "icons/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }
